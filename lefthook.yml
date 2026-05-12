@@ -1,0 +1,18 @@
+pre-commit:
+  parallel: true
+  commands:
+    biome:
+      run: npx biome check --write {staged_files} && git add {staged_files}
+      glob: "*.{ts,js,json}"
+
+commit-msg:
+  commands:
+    commitlint:
+      run: npx commitlint --edit {1}
+
+pre-push:
+  commands:
+    typecheck:
+      run: pnpm tsc --noEmit
+    test:
+      run: pnpm test
