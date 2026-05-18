@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it } from "bun:test";
 import { isValidToken } from "./token.js";
 
 describe("isValidToken", () => {
@@ -17,5 +17,11 @@ describe("isValidToken", () => {
 
   it("returns false for undefined token", () => {
     expect(isValidToken(undefined, "correct-secret")).toBe(false);
+  });
+
+  it("returns false when expected key is empty string (auth disabled guard)", () => {
+    expect(isValidToken("anything", "")).toBe(false);
+    expect(isValidToken("secret", "")).toBe(false);
+    expect(isValidToken("", "")).toBe(false);
   });
 });

@@ -1,6 +1,13 @@
 import { readdir } from "node:fs/promises";
+import { VAULT_FOLDERS } from "../config/folders.js";
 import type { VaultSync } from "../search/sync.js";
-import type { VaultRepository } from "../vault/repository.js";
+import { VaultError, VaultErrorCode } from "../utils/errors.js";
+import { logger } from "../utils/logger.js";
+import { isAclAllowed } from "../vault/path-safety.js";
+import type { IVaultRepository } from "../vault/repository-interface.js";
+import type { AclConfig } from "../vault/types.js";
+
+const folderLabel = (path: string) => path.replace(/^\d+_/, "");
 
 export interface TriageClassification {
   folder: string;
@@ -20,42 +27,14 @@ export interface TriageConfig {
   inboxFolder: string;
 }
 
-export class TriageState {
-  private pending = new Map<number, { path: string; suggestedFolder: string; confidence: number; reason: string }>();
-  private nextId = 1;
-
-  add(entry: { path: string; suggestedFolder: string; confidence: number; reason: string }): number {
-    const id = this.nextId++;
-    this.pending.set(id, entry);
-    return id;
-  }
-
-  get(id: number) {
-    return this.pending.get(id);
-  }
-
-  remove(id: number): boolean {
-    return this.pending.delete(id);
-  }
-
-  getAll(): Map<number, { path: string; suggestedFolder: string; confidence: number; reason: string }> {
-    return new Map(this.pending);
-  }
-
-  clear(): void {
-    this.pending.clear();
-    this.nextId = 1;
-  }
-
-  get size(): number {
-    return this.pending.size;
-  }
-}
-
-export async function discoverVaultFolders(vaultRoot: string, excludeFolder: string): Promise<string[]> {
+export async function discoverVaultFolders(
+  vaultRoot: string,
+  excludeFolder: string,
+  acl: AclConfig = { allowPaths: [], denyPaths: [] },
+): Promise<string[]> {
   const entries = await readdir(vaultRoot, { withFileTypes: true });
   return entries
-    .filter((e) => e.isDirectory() && !e.name.startsWith(".") && e.name !== excludeFolder)
+    .filter((e) => e.isDirectory() && !e.name.startsWith(".") && e.name !== excludeFolder && isAclAllowed(e.name, acl))
     .map((e) => e.name)
     .sort();
 }
@@ -96,10 +75,10 @@ export function classifyForTriageHeuristic(
 
   // Keyword matching (very basic)
   const keywordMap: [string[], string][] = [
-    [["project", "milestone", "deadline", "sprint"], "Projects"],
-    [["person", "met with", "meeting", "1:1"], "People"],
+    [["project", "milestone", "deadline", "sprint"], folderLabel(VAULT_FOLDERS.PROJECTS)],
+    [["person", "met with", "meeting", "1:1"], folderLabel(VAULT_FOLDERS.PEOPLE)],
     [["idea", "brainstorm", "concept"], "Ideas"],
-    [["admin", "invoice", "tax", "receipt"], "Admin"],
+    [["admin", "invoice", "tax", "receipt"], folderLabel(VAULT_FOLDERS.ADMIN)],
     [["reference", "documentation", "guide", "howto"], "References"],
   ];
 
@@ -118,13 +97,13 @@ export function classifyForTriageHeuristic(
 }
 
 export async function triageInbox(opts: {
-  vault: VaultRepository;
+  vault: IVaultRepository;
   vaultSync?: VaultSync;
   autoMoveThreshold: number;
   suggestThreshold: number;
   inboxFolder: string;
   dryRun?: boolean;
-  vaultPath?: string;
+  acl?: AclConfig;
   /** External classifications (e.g., from LLM caller). Key is note path. */
   classifications?: Map<string, TriageClassification>;
 }): Promise<TriageResult> {
@@ -136,15 +115,16 @@ export async function triageInbox(opts: {
   let notes: Array<{ path: string }>;
   try {
     notes = await vault.listFolder(inboxFolder, { recursive: false });
-  } catch {
-    return result;
+  } catch (err) {
+    logger.warn("triage", "inbox listFolder failed", { err: err instanceof Error ? err.message : String(err) });
+    throw new VaultError("Failed to list inbox folder", VaultErrorCode.STORE_UNAVAILABLE, err);
   }
 
   if (notes.length === 0) return result;
 
   // Discover available folders
-  const vaultRoot = opts.vaultPath ?? (vault as unknown as { root: string }).root;
-  const availableFolders = await discoverVaultFolders(vaultRoot, inboxFolder);
+  const vaultRoot = vault.vaultPath;
+  const availableFolders = await discoverVaultFolders(vaultRoot, inboxFolder, opts.acl);
 
   if (availableFolders.length === 0) return result;
 
@@ -176,7 +156,13 @@ export async function triageInbox(opts: {
           if (vaultSync) {
             const fromCanonical = note.path.endsWith(".md") ? note.path : `${note.path}.md`;
             const toCanonical = destPath.endsWith(".md") ? destPath : `${destPath}.md`;
-            await vaultSync.handleRename(fromCanonical, toCanonical).catch(() => {});
+            await vaultSync.handleRename(fromCanonical, toCanonical).catch((err: unknown) =>
+              logger.error("triage", "sync index update failed after auto-move", {
+                from: fromCanonical,
+                to: toCanonical,
+                err: err instanceof Error ? err.message : String(err),
+              }),
+            );
           }
         }
         result.moved.push({ path: note.path, destination: classification.folder });
@@ -191,7 +177,10 @@ export async function triageInbox(opts: {
         result.skipped.push(note.path);
       }
     } catch (err) {
-      console.error(`[triage] Error processing ${note.path}:`, err instanceof Error ? err.message : String(err));
+      logger.warn("triage", "error processing note", {
+        path: note.path,
+        err: err instanceof Error ? err.message : String(err),
+      });
       result.skipped.push(note.path);
     }
   }
@@ -227,42 +216,4 @@ export function formatTriageReport(result: TriageResult): string {
   }
 
   return lines.join("\n");
-}
-
-export async function handleTriageApproval(
-  state: TriageState,
-  vault: VaultRepository,
-  vaultSync: VaultSync | undefined,
-  id: number,
-  action: string,
-): Promise<string> {
-  const entry = state.get(id);
-  if (!entry) return `No pending suggestion #${id}.`;
-
-  if (action === "skip") {
-    state.remove(id);
-    return `Skipped: ${entry.path}`;
-  }
-
-  // "approve" uses suggested folder, anything else is a custom folder override
-  const targetFolder = action === "approve" ? entry.suggestedFolder : action;
-
-  const fileName = entry.path.split("/").at(-1) ?? entry.path;
-  const destPath = `${targetFolder}/${fileName}`;
-
-  try {
-    await vault.updateProperties(entry.path, { triaged: true });
-    await vault.moveNote(entry.path, destPath);
-
-    if (vaultSync) {
-      const fromCanonical = entry.path.endsWith(".md") ? entry.path : `${entry.path}.md`;
-      const toCanonical = destPath.endsWith(".md") ? destPath : `${destPath}.md`;
-      await vaultSync.handleRename(fromCanonical, toCanonical).catch(() => {});
-    }
-
-    state.remove(id);
-    return `Moved: ${entry.path} -> ${destPath}`;
-  } catch (err) {
-    return `Failed to move ${entry.path}: ${err instanceof Error ? err.message : String(err)}`;
-  }
 }

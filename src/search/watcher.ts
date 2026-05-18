@@ -10,6 +10,8 @@ export interface VaultWatcherOptions {
   vaultPath: string;
   vaultSync: VaultSync;
   debounceMs?: number;
+  /** How long to wait for a matching add before treating unlink as delete. */
+  renameWindowMs?: number;
   /** Extra chokidar options (e.g. usePolling for tests) */
   chokidarOptions?: ChokidarOptions;
 }
@@ -30,7 +32,7 @@ export interface VaultWatcher {
 const RENAME_WINDOW_MS = 200;
 
 export function createVaultWatcher(opts: VaultWatcherOptions): VaultWatcher {
-  const { vaultPath, vaultSync, debounceMs = 300, chokidarOptions } = opts;
+  const { vaultPath, vaultSync, debounceMs = 300, renameWindowMs = RENAME_WINDOW_MS, chokidarOptions } = opts;
   let watcher: FSWatcher | undefined;
   let running = false;
   const stats: WatcherStats = { eventsProcessed: 0, errors: 0 };
@@ -130,7 +132,7 @@ export function createVaultWatcher(opts: VaultWatcherOptions): VaultWatcher {
             err: err instanceof Error ? err.message : String(err),
           });
         }
-      }, RENAME_WINDOW_MS),
+      }, renameWindowMs),
     );
   }
 

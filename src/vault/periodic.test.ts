@@ -1,7 +1,7 @@
+import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { Period } from "./periodic.js";
 import { buildPeriodicPath, openOrCreatePeriodicNote } from "./periodic.js";
 import { VaultRepository } from "./repository.js";

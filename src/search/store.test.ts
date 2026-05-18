@@ -1,5 +1,10 @@
-import Database from "better-sqlite3";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import type { Statement } from "bun:sqlite";
+import { Database } from "bun:sqlite";
+import { afterEach, beforeEach, describe, expect, it, mock, spyOn } from "bun:test";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { logger } from "../utils/logger.js";
 import { EmbeddingStore } from "./embeddings.js";
 import { sanitizeFTS5Query, VaultSearchStore } from "./store.js";
 
@@ -18,6 +23,41 @@ describe("VaultSearchStore", () => {
     expect(store.count()).toBe(0);
   });
 
+  it("warns when SQLite rejects WAL journal mode for a non-memory path [PERF-02]", () => {
+    const warnSpy = spyOn(logger, "warn").mockImplementation(() => {});
+    const uriStore = new VaultSearchStore("file::memory:?cache=shared");
+    try {
+      expect(warnSpy).toHaveBeenCalledWith("sqlite-shim", "WAL journal mode was not enabled", {
+        dbPath: "file::memory:?cache=shared",
+        journalMode: "memory",
+      });
+    } finally {
+      uriStore.close();
+      mock.restore();
+    }
+  });
+
+  it("logs a warning when the WAL pragma itself is rejected [ERR-10]", () => {
+    const warnSpy = spyOn(logger, "warn").mockImplementation(() => {});
+    const prepareSpy = spyOn(Database.prototype, "prepare").mockImplementation(function (this: Database, sql: string) {
+      if (sql === "PRAGMA journal_mode = WAL") {
+        throw new Error("readonly database");
+      }
+      return prepareSpy.original.call(this, sql);
+    });
+
+    try {
+      expect(() => new VaultSearchStore("/tmp/rejected-wal.db")).toThrow("readonly database");
+      expect(warnSpy).toHaveBeenCalledWith("sqlite-shim", "WAL journal mode pragma failed", {
+        dbPath: "/tmp/rejected-wal.db",
+        err: "readonly database",
+      });
+    } finally {
+      prepareSpy.mockRestore();
+      warnSpy.mockRestore();
+    }
+  });
+
   it("upserts and retrieves by path", () => {
     const { changed } = store.upsert("notes/hello.md", "Hello world", "abc123", "hello", { type: "note" });
     expect(changed).toBe(true);
@@ -29,6 +69,54 @@ describe("VaultSearchStore", () => {
     expect(entry?.contentHash).toBe("abc123");
     expect(entry?.fileName).toBe("hello");
     expect(entry?.metadata).toEqual({ type: "note" });
+  });
+
+  it("retrieves content for multiple paths in one call", () => {
+    store.upsert("notes/a.md", "Alpha", "h1", "a", {});
+    store.upsert("notes/b.md", "Beta", "h2", "b", {});
+
+    const contents = store.getContentBatchByPaths(["notes/a.md", "notes/b.md", "missing.md"]);
+    expect(contents.get("notes/a.md")).toBe("Alpha");
+    expect(contents.get("notes/b.md")).toBe("Beta");
+    expect(contents.has("missing.md")).toBe(false);
+  });
+
+  it("chunks oversized path lookups to stay under SQLite variable limits", () => {
+    store.upsert("notes/a.md", "Alpha", "h1", "a", {});
+    store.upsert("notes/b.md", "Beta", "h2", "b", {});
+    const paths = Array.from({ length: 40_000 }, (_, i) => `missing-${i}.md`);
+    paths[123] = "notes/a.md";
+    paths[30_123] = "notes/b.md";
+
+    const entries = store.getBatchByPaths(paths);
+    const contents = store.getContentBatchByPaths(paths);
+
+    expect(entries.get("notes/a.md")?.content).toBe("Alpha");
+    expect(entries.get("notes/b.md")?.content).toBe("Beta");
+    expect(contents.get("notes/a.md")).toBe("Alpha");
+    expect(contents.get("notes/b.md")).toBe("Beta");
+  });
+
+  it("builds and invalidates a cached path index", () => {
+    store.upsert("notes/Alpha.md", "Alpha", "h1", "Alpha", {});
+
+    const first = store.getPathIndex();
+    expect(first.get("Alpha")).toBe("notes/Alpha.md");
+    expect(first.get("notes/Alpha")).toBe("notes/Alpha.md");
+
+    store.upsert("notes/Beta.md", "Beta", "h2", "Beta", {});
+    const second = store.getPathIndex();
+    expect(second).not.toBe(first);
+    expect(second.get("Beta")).toBe("notes/Beta.md");
+  });
+
+  it("keeps the cached path index when only existing path content changes", () => {
+    store.upsert("notes/Alpha.md", "Alpha", "h1", "Alpha", {});
+
+    const first = store.getPathIndex();
+    store.upsert("notes/Alpha.md", "Updated Alpha", "h2", "Alpha", {});
+
+    expect(store.getPathIndex()).toBe(first);
   });
 
   it("skips upsert when hash unchanged", () => {
@@ -45,6 +133,28 @@ describe("VaultSearchStore", () => {
     const entry = store.getByPath("a.md");
     expect(entry?.content).toBe("new content");
     expect(entry?.contentHash).toBe("hash2");
+  });
+
+  it("logs SQLite error codes when an upsert transaction fails [ERR-09]", () => {
+    const errorSpy = spyOn(logger, "error").mockImplementation(() => {});
+    const sqliteErr = Object.assign(new Error("constraint failed"), { code: "SQLITE_CONSTRAINT" });
+    const insertSpy = spyOn((store as unknown as { stmtInsertFts: Statement }).stmtInsertFts, "run").mockImplementation(
+      () => {
+        throw sqliteErr;
+      },
+    );
+
+    try {
+      expect(() => store.upsert("a.md", "content", "hash1", "a", {})).toThrow("constraint failed");
+      expect(errorSpy).toHaveBeenCalledWith("store", "upsert transaction failed", {
+        path: "a.md",
+        code: "SQLITE_CONSTRAINT",
+        err: "constraint failed",
+      });
+    } finally {
+      insertSpy.mockRestore();
+      errorSpy.mockRestore();
+    }
   });
 
   it("searches FTS basic query", () => {
@@ -93,6 +203,174 @@ describe("VaultSearchStore", () => {
     expect(results[0].frontmatter).toEqual({ type: "note", tags: ["test"] });
   });
 
+  it("paginates tags in SQL with a total count", () => {
+    store.upsert("a.md", "content", "h1", "a", { tags: ["alpha", "beta"] });
+    store.upsert("b.md", "content", "h2", "b", { tags: ["alpha", "gamma"] });
+
+    const page = store.listTagsPage(1, 1);
+    expect(page.total).toBe(3);
+    expect(page.items).toHaveLength(1);
+    expect(page.items[0]?.tag).toBeTruthy();
+  });
+
+  it("bounds dynamic statement cache size", () => {
+    store.upsert("a.md", "content", "h1", "a", {});
+
+    for (let i = 1; i <= 300; i++) {
+      store.count({ allowPaths: Array.from({ length: i }, (_, n) => `folder-${n}`), denyPaths: [] });
+    }
+
+    expect(store.getStatementCacheSize()).toBeLessThanOrEqual(256);
+  });
+
+  it("file-backed backup yields to the event loop before completion [PERF-01]", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "vault-search-backup-"));
+    const dbPath = path.join(dir, "search.db");
+    const destPath = path.join(dir, "backup.db");
+    const fileStore = new VaultSearchStore(dbPath);
+    try {
+      fileStore.upsert("a.md", "content", "h1", "a", {});
+
+      const backup = fileStore.backup(destPath);
+      const first = await Promise.race([
+        backup.then(() => "backup" as const),
+        new Promise<"tick">((resolve) => setTimeout(() => resolve("tick"), 0)),
+      ]);
+
+      expect(first).toBe("tick");
+      await backup;
+      expect(fs.existsSync(destPath)).toBe(true);
+    } finally {
+      fileStore.close();
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("logs backup failure with the destination path [ERR-01]", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "vault-search-backup-fail-"));
+    const dbPath = path.join(dir, "search.db");
+    const destPath = path.join(dir, "missing", "backup.db");
+    const errorSpy = spyOn(logger, "error").mockImplementation(() => {});
+    const fileStore = new VaultSearchStore(dbPath);
+    try {
+      fileStore.upsert("a.md", "content", "h1", "a", {});
+
+      await expect(fileStore.backup(destPath)).rejects.toThrow();
+      expect(errorSpy).toHaveBeenCalledWith(
+        "sqlite-shim",
+        "backup failed",
+        expect.objectContaining({ destPath, err: expect.any(String) }),
+      );
+    } finally {
+      fileStore.close();
+      mock.restore();
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("creates a backup database that can be opened and queried [QA-02]", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "vault-search-backup-integrity-"));
+    const dbPath = path.join(dir, "search.db");
+    const destPath = path.join(dir, "backup.db");
+    const fileStore = new VaultSearchStore(dbPath);
+    try {
+      fileStore.upsert("notes/a.md", "Alpha backup content", "h1", "a", { tags: ["backup"] });
+
+      await fileStore.backup(destPath);
+
+      const backupDb = new Database(destPath, { readonly: true });
+      try {
+        const row = backupDb
+          .query("SELECT canonical_path, content, metadata FROM vault_entries WHERE canonical_path = ?")
+          .get("notes/a.md") as { canonical_path: string; content: string; metadata: string } | null;
+        expect(row).toEqual({
+          canonical_path: "notes/a.md",
+          content: "Alpha backup content",
+          metadata: JSON.stringify({ tags: ["backup"] }),
+        });
+      } finally {
+        backupDb.close();
+      }
+    } finally {
+      fileStore.close();
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("reuses cached statement for in-memory backup — no ephemeral prepare call [ERR-14]", () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "vault-erp14-"));
+    const destPath = path.join(dir, "backup.db");
+    const memStore = new VaultSearchStore(":memory:");
+    const prepareSpy = spyOn(Database.prototype, "prepare");
+    try {
+      prepareSpy.mockClear();
+      memStore.upsert("a.md", "content", "h1", "a", {});
+      memStore.backup(destPath);
+      expect(prepareSpy).not.toHaveBeenCalled();
+    } finally {
+      prepareSpy.mockRestore();
+      memStore.close();
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("backs up file-backed database when dest path contains a single quote [QA-07]", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "vault-search-quote-"));
+    const dbPath = path.join(dir, "search.db");
+    // Path with a single quote in the directory name
+    const quoteDir = path.join(dir, "it's a backup");
+    fs.mkdirSync(quoteDir);
+    const destPath = path.join(quoteDir, "backup.db");
+    const fileStore = new VaultSearchStore(dbPath);
+    try {
+      fileStore.upsert("a.md", "content", "h1", "a", {});
+      await fileStore.backup(destPath);
+      expect(fs.existsSync(destPath)).toBe(true);
+    } finally {
+      fileStore.close();
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("enables WAL journal mode on a real file-backed store [QA-08]", () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "vault-search-wal-"));
+    const dbPath = path.join(dir, "search.db");
+    const fileStore = new VaultSearchStore(dbPath);
+    try {
+      const checkDb = new Database(dbPath, { readonly: true });
+      try {
+        const row = checkDb.query("PRAGMA journal_mode").get() as { journal_mode: string };
+        expect(row.journal_mode).toBe("wal");
+      } finally {
+        checkDb.close();
+      }
+    } finally {
+      fileStore.close();
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("pages stale embeddings directly from SQL and removes orphans", () => {
+    store.upsert("a.md", "Alpha", "hash-a", "a", {});
+    store.upsert("b.md", "Beta", "hash-b", "b", {});
+    store.upsert("c.md", "Gamma", "hash-c", "c", {});
+
+    const embeddings = store.createEmbeddingStore();
+    embeddings.initSchema();
+    embeddings.upsert("a.md", new Float32Array([1, 0]), "hash-a", "model-a");
+    embeddings.upsert("b.md", new Float32Array([0, 1]), "old-hash", "model-a");
+    embeddings.upsert("orphan.md", new Float32Array([1, 1]), "hash-o", "model-a");
+
+    expect(embeddings.deleteOrphansFromVaultEntries()).toBe(1);
+    const stale = embeddings.getStaleOrMissingPage(1, "model-a");
+    const stalePage = embeddings.getStaleOrMissingPageWithTotal(1, "model-a");
+    expect(stale).toHaveLength(1);
+    expect(stalePage.rows).toEqual(stale);
+    expect(stalePage.total).toBe(2);
+    expect(embeddings.countStaleOrMissing("model-a")).toBe(2);
+    expect(stale[0]?.path).toBe("b.md");
+  });
+
   it("deletes by path", () => {
     store.upsert("a.md", "content", "h1", "a", {});
     expect(store.count()).toBe(1);
@@ -125,6 +403,13 @@ describe("VaultSearchStore", () => {
     expect(store.count()).toBe(1);
     store.upsert("b.md", "c", "h", "b", {});
     expect(store.count()).toBe(2);
+  });
+
+  it("applies non-empty allow-list ACL clauses even when another allow path normalizes empty", () => {
+    store.upsert("allowed/a.md", "content", "h1", "a", {});
+    store.upsert("blocked/b.md", "content", "h2", "b", {});
+
+    expect(store.listCanonicalPaths({ allowPaths: ["", "allowed"], denyPaths: [] })).toEqual(["allowed/a.md"]);
   });
 
   it("searches by filename", () => {
@@ -329,7 +614,41 @@ describe("VaultSearchStore", () => {
   });
 
   it("returns schema version", () => {
-    expect(store.getSchemaVersion()).toBe(1);
+    // Schema version is now at 2 (initial schema + date indexes migration)
+    expect(store.getSchemaVersion()).toBe(2);
+  });
+
+  it("reuses the prepared schema version statement across repeated calls [PERF-04]", () => {
+    const dbPath = path.join(os.tmpdir(), `vault-schema-version-${Date.now()}.db`);
+    const prepareSpy = spyOn(Database.prototype, "prepare");
+    const localStore = new VaultSearchStore(dbPath);
+    try {
+      const preparesBeforeReads = prepareSpy.mock.calls.filter(
+        ([sql]) => sql === "SELECT version FROM schema_version WHERE id = 1",
+      ).length;
+      expect(localStore.getSchemaVersion()).toBe(2);
+      expect(localStore.getSchemaVersion()).toBe(2);
+
+      const matchingPreparesAfterReads = prepareSpy.mock.calls.filter(
+        ([sql]) => sql === "SELECT version FROM schema_version WHERE id = 1",
+      ).length;
+      expect(matchingPreparesAfterReads - preparesBeforeReads).toBe(0);
+    } finally {
+      localStore.close();
+      prepareSpy.mockRestore();
+      fs.rmSync(dbPath, { force: true });
+    }
+  });
+
+  it("does not mask non-schema SQLite failures when reading schema version [ERR-08]", () => {
+    const getSpy = spyOn(
+      (store as unknown as { stmtGetSchemaVersion: { get(): unknown } }).stmtGetSchemaVersion,
+      "get",
+    ).mockImplementation(() => {
+      throw new Error("disk I/O error");
+    });
+    expect(() => store.getSchemaVersion()).toThrow();
+    getSpy.mockRestore();
   });
 
   it("preserves created_at on update", () => {
@@ -344,6 +663,26 @@ describe("VaultSearchStore", () => {
     expect(second?.createdAt).toBe(before);
     expect(second?.updatedAt).toBeGreaterThanOrEqual(before);
   });
+
+  it("reuses transaction wrappers across repeated upserts and deletes [PERF-06]", () => {
+    const dbPath = path.join(os.tmpdir(), `vault-transaction-cache-${Date.now()}.db`);
+    const transactionSpy = spyOn(Database.prototype, "transaction");
+    const localStore = new VaultSearchStore(dbPath);
+    try {
+      const transactionsBeforeOps = transactionSpy.mock.calls.length;
+
+      localStore.upsert("a.md", "content-a", "h1", "a", {});
+      localStore.upsert("b.md", "content-b", "h2", "b", {});
+      localStore.deleteByPath("a.md");
+      localStore.deleteByPath("b.md");
+
+      expect(transactionSpy.mock.calls.length - transactionsBeforeOps).toBe(0);
+    } finally {
+      localStore.close();
+      transactionSpy.mockRestore();
+      fs.rmSync(dbPath, { force: true });
+    }
+  });
 });
 
 describe("VaultSearchStore — hybrid search", () => {
@@ -354,7 +693,7 @@ describe("VaultSearchStore — hybrid search", () => {
   beforeEach(() => {
     store = new VaultSearchStore(":memory:");
     embDb = new Database(":memory:");
-    embDb.pragma("journal_mode = WAL");
+    embDb.exec("PRAGMA journal_mode = WAL;");
     embStore = new EmbeddingStore(embDb);
     embStore.initSchema();
 
@@ -407,6 +746,22 @@ describe("VaultSearchStore — hybrid search", () => {
     expect(results.every((r) => r.path.startsWith("inbox/"))).toBe(true);
   });
 
+  it("filters vector candidates through ACL before hybrid scoring", () => {
+    store.upsert("public/d.md", "Semantic-only allowed note", "h4", "d", {});
+    store.upsert("secret/e.md", "Semantic-only denied note", "h5", "e", {});
+    embStore.upsert("secret/e.md", new Float32Array([1, 0, 0]), "h5", "m");
+    embStore.upsert("public/d.md", new Float32Array([0.9, 0.1, 0]), "h4", "m");
+
+    const queryEmbed = new Float32Array([1, 0, 0]);
+    const results = store.searchHybrid("no-ft-match", queryEmbed, embStore, 0.5, 10, undefined, {
+      allowPaths: [],
+      denyPaths: ["secret"],
+    });
+
+    expect(results.map((r) => r.path)).toContain("public/d.md");
+    expect(results.map((r) => r.path)).not.toContain("secret/e.md");
+  });
+
   it("getContentHashMap returns correct entries", () => {
     const map = store.getContentHashMap();
     expect(map.size).toBe(3);
@@ -430,6 +785,22 @@ describe("VaultSearchStore — hybrid search", () => {
     // c.md should win
     expect(results[0].path).toBe("c.md");
     expect(results[0].score).toBeGreaterThan(0);
+  });
+
+  it("passes limit * candidateMultiplier as the FTS candidate pool size [API-11]", () => {
+    const ftsSpy = spyOn(store, "searchFTS").mockReturnValue([]);
+    try {
+      embStore.upsert("a.md", new Float32Array([1, 0, 0]), "h1", "m");
+      const queryEmbed = new Float32Array([1, 0, 0]);
+
+      store.searchHybrid("query", queryEmbed, embStore, 0.5, 5, undefined, undefined, 3);
+
+      // First positional argument to searchFTS after the query string is the limit.
+      // With candidateMultiplier=3 and limit=5, it should be 5*3=15
+      expect(ftsSpy).toHaveBeenCalledWith("query", 15, undefined, undefined, undefined);
+    } finally {
+      ftsSpy.mockRestore();
+    }
   });
 });
 

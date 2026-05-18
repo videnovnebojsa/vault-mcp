@@ -1,14 +1,14 @@
-import Database from "better-sqlite3";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { Database } from "bun:sqlite";
+import { afterEach, beforeEach, describe, expect, it, spyOn } from "bun:test";
 import { EmbeddingStore } from "./embeddings.js";
 
 describe("EmbeddingStore", () => {
-  let db: Database.Database;
+  let db: Database;
   let store: EmbeddingStore;
 
   beforeEach(() => {
     db = new Database(":memory:");
-    db.pragma("journal_mode = WAL");
+    db.exec("PRAGMA journal_mode = WAL;");
     store = new EmbeddingStore(db);
     store.initSchema();
   });
@@ -20,6 +20,13 @@ describe("EmbeddingStore", () => {
   it("starts empty", () => {
     store.load();
     expect(store.size).toBe(0);
+  });
+
+  it("throws a descriptive error when used before initSchema", () => {
+    const uninitialized = new EmbeddingStore(db);
+    expect(() => uninitialized.load()).toThrow("Call initSchema()");
+    expect(() => uninitialized.upsert("a.md", new Float32Array([1]), "hash", "model")).toThrow("Call initSchema()");
+    expect(() => uninitialized.search(new Float32Array([1]), 10)).toThrow("Call initSchema()");
   });
 
   it("upsert + load round-trip preserves Float32Array", () => {
@@ -76,6 +83,14 @@ describe("EmbeddingStore", () => {
 
     const results = store.search(new Float32Array([1, 0, 0]), 2);
     expect(results.length).toBe(2);
+  });
+
+  it("search applies a path filter before ranking", () => {
+    store.upsert("private/a.md", new Float32Array([1, 0, 0]), "h1", "m");
+    store.upsert("public/b.md", new Float32Array([0.9, 0.1, 0]), "h2", "m");
+
+    const results = store.search(new Float32Array([1, 0, 0]), 10, (p) => p.startsWith("public/"));
+    expect(results.map((r) => r.path)).toEqual(["public/b.md"]);
   });
 
   it("delete removes from both SQLite and memory", () => {
@@ -172,5 +187,57 @@ describe("EmbeddingStore", () => {
     const deleted = store.deleteOrphans(new Set(["a.md"]));
     expect(deleted).toBe(0);
     expect(store.size).toBe(1);
+  });
+
+  it("handles oversized exclude lists without exceeding SQLite variable limits", () => {
+    db.exec(`
+      CREATE TABLE vault_entries (
+        canonical_path TEXT PRIMARY KEY,
+        content TEXT NOT NULL,
+        content_hash TEXT NOT NULL,
+        file_name TEXT NOT NULL,
+        metadata TEXT NOT NULL DEFAULT '{}',
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL
+      )
+    `);
+    db.prepare(
+      `INSERT INTO vault_entries (canonical_path, content, content_hash, file_name, metadata, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+    ).run("notes/a.md", "Alpha", "hash-a", "a", "{}", Date.now(), Date.now());
+
+    const excludePaths = Array.from({ length: 40_000 }, (_, i) => `missing-${i}.md`);
+    excludePaths[123] = "notes/a.md";
+
+    expect(store.countStaleOrMissing("m", excludePaths)).toBe(0);
+    expect(store.getStaleOrMissingPageWithTotal(10, "m", excludePaths)).toEqual({ rows: [], total: 0 });
+  });
+
+  it("reuses the prepared stale-page query across repeated calls [PERF-03]", () => {
+    db.exec(`
+      CREATE TABLE vault_entries (
+        canonical_path TEXT PRIMARY KEY,
+        content TEXT NOT NULL,
+        content_hash TEXT NOT NULL,
+        file_name TEXT NOT NULL,
+        metadata TEXT NOT NULL DEFAULT '{}',
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL
+      )
+    `);
+    db.prepare(
+      `INSERT INTO vault_entries (canonical_path, content, content_hash, file_name, metadata, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+    ).run("notes/a.md", "Alpha", "hash-a", "a", "{}", Date.now(), Date.now());
+
+    const prepareSpy = spyOn(db, "prepare");
+
+    store.getStaleOrMissingPageWithTotal(10, "m");
+    store.getStaleOrMissingPageWithTotal(10, "m");
+
+    const matchingPrepares = prepareSpy.mock.calls.filter(
+      ([sql]) => typeof sql === "string" && sql.includes("COUNT(*) OVER() AS totalCount"),
+    );
+    expect(matchingPrepares).toHaveLength(1);
   });
 });

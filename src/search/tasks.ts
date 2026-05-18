@@ -1,9 +1,12 @@
+import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import { join } from "node:path";
 import type { EmbedProvider } from "../search/embed-provider.js";
 import type { EmbeddingStore } from "../search/embeddings.js";
-import type { VaultSearchStore } from "../search/store.js";
+import type { ISearchStore } from "../search/store.js";
+import { sendAlertFireAndForget } from "../utils/alert-fire-and-forget.js";
 import { CircuitOpenError } from "../utils/circuit-breaker.js";
+import { logger } from "../utils/logger.js";
 
 export interface ScheduledTaskResult {
   taskId: string;
@@ -11,6 +14,8 @@ export interface ScheduledTaskResult {
   message: string;
   durationMs: number;
   outputPath?: string;
+  /** For embed-backlog tasks: number of stale entries not yet processed in this call. */
+  remaining?: number;
 }
 
 export function formatDate(d: Date): string {
@@ -21,32 +26,38 @@ export function formatDate(d: Date): string {
 }
 
 export async function runEmbedBacklogTask(opts: {
-  searchStore: VaultSearchStore;
+  searchStore: ISearchStore;
   embeddingStore: EmbeddingStore;
   embedProvider: EmbedProvider;
   batchSize: number;
   excludePaths?: string[];
+  maxNotes?: number;
+  singleRetryDelayMs?: number;
 }): Promise<ScheduledTaskResult> {
   const start = Date.now();
   const taskId = "embed-backlog";
 
   try {
-    const currentEntries = opts.searchStore.getContentHashMap();
-
     // Clean up orphaned embeddings for deleted/renamed notes
-    const orphansDeleted = opts.embeddingStore.deleteOrphans(new Set(currentEntries.keys()));
+    const orphansDeleted = opts.embeddingStore.deleteOrphansFromVaultEntries();
 
-    const excludeSet = new Set(opts.excludePaths ?? []);
-    const stale = opts.embeddingStore
-      .getStaleOrMissing(currentEntries, opts.embedProvider.modelName)
-      .filter((p) => !excludeSet.has(p));
+    const maxNotes = opts.maxNotes ?? 500;
+    const stalePage = opts.embeddingStore.getStaleOrMissingPageWithTotal(
+      maxNotes,
+      opts.embedProvider.modelName,
+      opts.excludePaths,
+    );
+    const staleRows = stalePage.rows;
+    const remaining = Math.max(0, stalePage.total - staleRows.length);
+    const stale = staleRows.map((row) => row.path);
+    const hashByPath = new Map(staleRows.map((row) => [row.path, row.contentHash]));
 
     if (stale.length === 0) {
       const msg =
         orphansDeleted > 0
           ? `No stale entries to embed, ${orphansDeleted} orphans removed`
           : "No stale entries to embed";
-      return { taskId, ok: true, message: msg, durationMs: Date.now() - start };
+      return { taskId, ok: true, message: msg, durationMs: Date.now() - start, remaining };
     }
 
     let embedded = 0;
@@ -58,15 +69,16 @@ export async function runEmbedBacklogTask(opts: {
       const texts: string[] = [];
       const paths: string[] = [];
       const hashes: string[] = [];
+      const batchContent = opts.searchStore.getContentBatchByPaths(batch);
 
       const skippedPaths: string[] = [];
       for (const path of batch) {
-        const content = opts.searchStore.getContentByPath(path);
+        const content = batchContent.get(path);
         if (content) {
           // Truncate to ~8000 chars to stay within token limits
           texts.push(content.slice(0, 8000));
           paths.push(path);
-          hashes.push(currentEntries.get(path) ?? "");
+          hashes.push(hashByPath.get(path) ?? "");
         } else {
           skippedPaths.push(path);
         }
@@ -75,7 +87,7 @@ export async function runEmbedBacklogTask(opts: {
       if (skippedPaths.length > 0) {
         for (const sp of skippedPaths) {
           failedPaths.push(`${sp} — skipped (empty content, consider deleting)`);
-          console.error(`[embed-backlog] skipped: ${sp} — no indexed content`);
+          logger.warn("embed-backlog", "skipped: no indexed content", { path: sp });
         }
       }
       if (texts.length === 0) continue;
@@ -92,12 +104,12 @@ export async function runEmbedBacklogTask(opts: {
       } catch (err) {
         if (err instanceof CircuitOpenError) {
           errors += texts.length;
-          console.error(`[embed-backlog] circuit open, skipping remaining batches`);
+          logger.warn("embed-backlog", "circuit open, skipping remaining batches");
           break;
         }
-        console.error(
-          `[embed-backlog] batch error: ${err instanceof Error ? err.message : String(err)}, retrying individually`,
-        );
+        logger.warn("embed-backlog", "batch error, retrying individually", {
+          err: err instanceof Error ? err.message : String(err),
+        });
         let circuitOpen = false;
         for (let j = 0; j < texts.length; j++) {
           try {
@@ -113,13 +125,14 @@ export async function runEmbedBacklogTask(opts: {
             errors++;
             if (noteErr instanceof CircuitOpenError) {
               errors += texts.length - j - 1;
-              console.error(`[embed-backlog] circuit open, skipping remaining`);
+              logger.warn("embed-backlog", "circuit open in individual retry");
               circuitOpen = true;
               break;
             }
             const reason = noteErr instanceof Error ? noteErr.message : String(noteErr);
             failedPaths.push(`${paths[j]} — ${reason}`);
-            console.error(`[embed-backlog] failed: ${paths[j]} — ${reason}`);
+            logger.warn("embed-backlog", "failed to embed note", { path: paths[j], err: reason });
+            await delay(retryDelayMs(opts.singleRetryDelayMs, errors));
           }
         }
         if (circuitOpen) break;
@@ -130,7 +143,7 @@ export async function runEmbedBacklogTask(opts: {
     if (failedPaths.length > 0) {
       msg += `\nFailed:\n${failedPaths.join("\n")}`;
     }
-    return { taskId, ok: true, message: msg, durationMs: Date.now() - start };
+    return { taskId, ok: true, message: msg, durationMs: Date.now() - start, remaining };
   } catch (err) {
     return {
       taskId,
@@ -141,10 +154,22 @@ export async function runEmbedBacklogTask(opts: {
   }
 }
 
+function retryDelayMs(configuredDelayMs: number | undefined, failures: number): number {
+  if (configuredDelayMs !== undefined) return configuredDelayMs;
+  const base = Math.min(1000, 100 * 2 ** Math.min(failures - 1, 4));
+  return base + Math.random() * base * 0.25;
+}
+
+async function delay(ms: number): Promise<void> {
+  if (ms <= 0) return;
+  await new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 export async function runBackupTask(opts: {
-  searchStore: VaultSearchStore;
+  searchStore: ISearchStore;
   backupDir: string;
   maxBackups: number;
+  alertWebhookUrl?: string;
 }): Promise<ScheduledTaskResult> {
   const start = Date.now();
   const taskId = "db-backup";
@@ -157,11 +182,10 @@ export async function runBackupTask(opts: {
       .toISOString()
       .replace(/:/g, "-")
       .replace(/\.\d+Z$/, "");
-    const filename = `vault-search-${timestamp}.db`;
+    const filename = `vault-search-${timestamp}-${randomUUID()}.db`;
     const backupPath = join(opts.backupDir, filename);
 
-    const db = opts.searchStore.getDatabase();
-    await db.backup(backupPath);
+    await opts.searchStore.backup(backupPath);
 
     const stat = await fs.stat(backupPath);
     const sizeMB = (stat.size / (1024 * 1024)).toFixed(2);
@@ -182,10 +206,21 @@ export async function runBackupTask(opts: {
     const msg = `Backup saved: ${filename} (${sizeMB} MB)${pruned > 0 ? `, pruned ${pruned} old backup(s)` : ""}`;
     return { taskId, ok: true, message: msg, durationMs: Date.now() - start, outputPath: backupPath };
   } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    logger.error("backup", "backup failed", { err: message, backupDir: opts.backupDir });
+    if (opts.alertWebhookUrl) {
+      sendAlertFireAndForget({
+        webhookUrl: opts.alertWebhookUrl,
+        level: "error",
+        source: "backup",
+        message: "Backup failed",
+        details: { backupDir: opts.backupDir, err: message },
+      });
+    }
     return {
       taskId,
       ok: false,
-      message: err instanceof Error ? err.message : String(err),
+      message,
       durationMs: Date.now() - start,
     };
   }

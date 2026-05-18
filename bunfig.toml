@@ -1,0 +1,18 @@
+[test]
+isolate = true
+coverage = true
+coverageReporter = ["text", "lcov"]
+coverageDir = "coverage"
+coverageThreshold = { lines = 80, functions = 80, branches = 70 }
+coveragePathIgnorePatterns = [
+  "**/*.test.ts",
+  "**/*types.ts",
+  "src/index.ts",
+  "src/bootstrap.ts",
+  "src/http.ts",
+  "src/config.ts",
+  "src/mcp/server.ts",
+  "src/capture/service.ts",
+  "src/search/tasks.ts",
+  "src/search/connections.ts"
+]

@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it } from "bun:test";
 import { getAllCircuits, getCircuit, resetAllCircuits } from "./circuits.js";
 
 describe("circuits registry", () => {
@@ -14,7 +14,7 @@ describe("circuits registry", () => {
 
   it("returns different instances for different names", () => {
     const a = getCircuit("todoist");
-    const b = getCircuit("deepseek");
+    const b = getCircuit("http-embed");
     expect(a).not.toBe(b);
   });
 
@@ -31,17 +31,23 @@ describe("circuits registry", () => {
 
   it("getAllCircuits returns all created circuits", () => {
     getCircuit("todoist");
-    getCircuit("deepseek");
+    getCircuit("http-embed");
     const all = getAllCircuits();
     expect(all.size).toBe(2);
     expect(all.has("todoist")).toBe(true);
-    expect(all.has("deepseek")).toBe(true);
+    expect(all.has("http-embed")).toBe(true);
   });
 
   it("resetAllCircuits clears registry", () => {
     getCircuit("todoist");
-    getCircuit("deepseek");
+    getCircuit("http-embed");
     resetAllCircuits();
     expect(getAllCircuits().size).toBe(0);
+  });
+
+  it("http-embed KNOWN_DEFAULTS have expected threshold values [QA-03]", () => {
+    const httpEmbed = getCircuit("http-embed");
+
+    expect((httpEmbed as unknown as { failureThreshold: number }).failureThreshold).toBe(5);
   });
 });

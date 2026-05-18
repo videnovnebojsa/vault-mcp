@@ -2,6 +2,7 @@ import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import path from "node:path";
 import { z } from "zod";
+import { logger } from "./utils/logger.js";
 
 export interface WatcherConfig {
   enabled: boolean;
@@ -12,7 +13,6 @@ export interface BackupConfig {
   enabled: boolean;
   dir: string;
   maxBackups: number;
-  intervalHours: number;
 }
 
 export interface EmbeddingConfig {
@@ -22,7 +22,7 @@ export interface EmbeddingConfig {
   model: string;
   hybridAlpha: number;
   batchSize: number;
-  intervalMinutes: number;
+  queryCacheMax: number;
 }
 
 export interface CaptureConfig {
@@ -85,10 +85,29 @@ function parsePathList(v: string | undefined): string[] {
     .filter(Boolean);
 }
 
+function parseHttpUrlEnv(name: string): string {
+  const raw = process.env[name]?.trim();
+  if (!raw) return "";
+  let url: URL;
+  try {
+    url = new URL(raw);
+  } catch {
+    throw new Error(`${name} must be a valid http or https URL`);
+  }
+  if (url.protocol !== "http:" && url.protocol !== "https:") {
+    throw new Error(`${name} must use http or https`);
+  }
+  return raw;
+}
+
 function safeInt(value: string | undefined, fallback: number): number {
   if (value === undefined) return fallback;
   const n = parseInt(value, 10);
-  return Number.isNaN(n) ? fallback : n;
+  if (Number.isNaN(n)) {
+    logger.warn("config", "non-integer env value ignored", { value, fallback });
+    return fallback;
+  }
+  return n;
 }
 
 function expandHome(p: string): string {
@@ -137,16 +156,15 @@ export function loadConfig(): VaultConfig {
       enabled: process.env["ENABLE_DB_BACKUP"] !== "false",
       dir: backupDirRaw ? path.resolve(expandHome(backupDirRaw)) : path.join(vaultPath, ".vault-backups"),
       maxBackups: safeInt(process.env["DB_BACKUP_MAX_KEEP"], 5),
-      intervalHours: safeInt(process.env["DB_BACKUP_INTERVAL_HOURS"], 24),
     },
     embedding: {
       enabled: process.env["ENABLE_EMBEDDINGS"] === "true",
       apiKey: process.env["EMBEDDING_API_KEY"] ?? "",
-      endpoint: process.env["EMBEDDING_ENDPOINT"] ?? "",
+      endpoint: parseHttpUrlEnv("EMBEDDING_ENDPOINT"),
       model: process.env["EMBEDDING_MODEL"] ?? "text-embedding-3-small",
       hybridAlpha,
       batchSize: safeInt(process.env["EMBED_BATCH_SIZE"], 20),
-      intervalMinutes: safeInt(process.env["EMBED_INTERVAL_MINUTES"], 30),
+      queryCacheMax: safeInt(process.env["QUERY_EMBEDDING_CACHE_MAX"], 128),
     },
     capture: {
       enableCapturePipeline: process.env["ENABLE_CAPTURE_PIPELINE"] === "true",
@@ -155,7 +173,7 @@ export function loadConfig(): VaultConfig {
     mcpPort: safeInt(process.env["MCP_PORT"], 3782),
     mcpHost: process.env["MCP_HOST"] ?? "127.0.0.1",
     mcpApiKey: process.env["MCP_API_KEY"] ?? "",
-    alertWebhookUrl: process.env["ALERT_WEBHOOK_URL"] ?? "",
+    alertWebhookUrl: parseHttpUrlEnv("ALERT_WEBHOOK_URL"),
     watcher: {
       enabled: process.env["ENABLE_FILE_WATCHER"] !== "false",
       debounceMs: safeInt(process.env["FILE_WATCHER_DEBOUNCE_MS"], 300),
@@ -167,6 +185,6 @@ export function loadConfig(): VaultConfig {
     toolTimeoutMs: safeInt(process.env["TOOL_TIMEOUT_MS"], 30_000),
     classifyRules,
     enableOtel: process.env["ENABLE_OTEL"] === "true",
-    otelEndpoint: process.env["OTEL_EXPORTER_OTLP_ENDPOINT"] ?? "",
+    otelEndpoint: parseHttpUrlEnv("OTEL_EXPORTER_OTLP_ENDPOINT"),
   };
 }

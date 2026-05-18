@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it } from "bun:test";
 import { MetricsStore } from "./metrics.js";
 
 // Export MetricsStore for testing — the module also exports the singleton `metrics`.

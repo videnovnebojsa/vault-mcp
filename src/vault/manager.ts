@@ -1,38 +1,72 @@
 import path from "node:path";
-import { SecondBrainService } from "../capture/service.js";
-import type { EmbeddingConfig, VaultConfig } from "../config.js";
-import { DeepSeekEmbedProvider, type EmbedProvider } from "../search/embed-provider.js";
-import { EmbeddingStore } from "../search/embeddings.js";
-import { VaultSearchStore } from "../search/store.js";
+import type { CaptureConfig, EmbeddingConfig, VaultConfig } from "../config.js";
+import { type EmbedProvider, HttpEmbedProvider } from "../search/embed-provider.js";
+import type { EmbeddingStore } from "../search/embeddings.js";
+import { type ISearchStore, VaultSearchStore } from "../search/store.js";
 import { VaultSync } from "../search/sync.js";
 import { createVaultWatcher, type VaultWatcher } from "../search/watcher.js";
+import { sendAlertFireAndForget } from "../utils/alert-fire-and-forget.js";
+import { VaultError, VaultErrorCode } from "../utils/errors.js";
 import { logger } from "../utils/logger.js";
 import { VaultRepository } from "./repository.js";
+import type { IVaultRepository } from "./repository-interface.js";
 import type { AclConfig } from "./types.js";
 
 export interface VaultServices {
-  vault: VaultRepository;
-  searchStore: VaultSearchStore;
+  vault: IVaultRepository;
+  searchStore: ISearchStore | undefined;
   vaultSync: VaultSync;
-  capture: SecondBrainService | null;
+  capture: CaptureService | null;
   embeddingStore: EmbeddingStore | undefined;
   embedProvider: EmbedProvider | undefined;
   embeddingConfig: EmbeddingConfig;
   aclConfig: AclConfig;
-  vaultPath: string;
   watcher: VaultWatcher | null;
   bootFailed: boolean;
   /** Resolves when initial sync (and watcher start) have completed or failed. Never rejects. */
   bootReady: Promise<void>;
 }
 
-export class VaultManager {
+export interface SyncTracker {
+  trackSync(p: Promise<void>): void;
+}
+
+export type EmbedProviderFactory = (cfg: EmbeddingConfig) => EmbedProvider;
+
+export interface CaptureService {
+  processCapture(text: string): Promise<{
+    ok: boolean;
+    notePath?: string | undefined;
+    message?: string | undefined;
+  }>;
+}
+
+export type CaptureFactory = (opts: {
+  vaultPath: string;
+  config: CaptureConfig;
+  vault: IVaultRepository;
+}) => CaptureService;
+
+function defaultEmbedProviderFactory(cfg: EmbeddingConfig): EmbedProvider {
+  return new HttpEmbedProvider(cfg.apiKey, cfg.endpoint, cfg.model);
+}
+
+export class VaultManager implements SyncTracker {
   private readonly cache = new Map<string, VaultServices>();
+  private readonly inflightSyncs = new Set<Promise<void>>();
 
   constructor(
     private readonly namedVaults: Record<string, string>,
     private readonly baseConfig: VaultConfig,
+    private readonly embedProviderFactory: EmbedProviderFactory = defaultEmbedProviderFactory,
+    private readonly captureFactory?: CaptureFactory | undefined,
   ) {}
+
+  /** Call this instead of bare fire-and-forget. Tracks the promise for drain on shutdown. */
+  trackSync(p: Promise<void>): void {
+    this.inflightSyncs.add(p);
+    p.finally(() => this.inflightSyncs.delete(p));
+  }
 
   listVaults(): Array<{ name: string }> {
     return Object.keys(this.namedVaults).map((name) => ({ name }));
@@ -45,8 +79,7 @@ export class VaultManager {
   getServices(name = "default"): VaultServices {
     const vaultPath = this.namedVaults[name];
     if (vaultPath === undefined) {
-      const available = Object.keys(this.namedVaults).join(", ");
-      throw new Error(`Unknown vault: "${name}". Available: ${available}`);
+      throw new VaultError("Unknown vault", VaultErrorCode.VALIDATION);
     }
 
     let svc = this.cache.get(name);
@@ -76,9 +109,19 @@ export class VaultManager {
         svc.embeddingStore.load();
       }
     } catch (err) {
+      const message = err instanceof Error ? (err.stack ?? err.message) : String(err);
       logger.error("vault-manager", `${name}: boot failed`, {
-        err: err instanceof Error ? (err.stack ?? err.message) : String(err),
+        err: message,
       });
+      if (this.baseConfig.alertWebhookUrl) {
+        sendAlertFireAndForget({
+          webhookUrl: this.baseConfig.alertWebhookUrl,
+          level: "error",
+          source: "vault-manager",
+          message: `${name}: boot failed`,
+          details: { vault: name, err: message },
+        });
+      }
       // Set synchronous sentinel for callers that cannot await (e.g. health endpoint).
       svc.bootFailed = true;
       // Re-throw so bootReady rejects and tool handlers get a real error instead of a silent no-op.
@@ -102,20 +145,17 @@ export class VaultManager {
     let embeddingStore: EmbeddingStore | undefined;
     let embedProvider: EmbedProvider | undefined;
     if (embeddingConfig.enabled && embeddingConfig.apiKey) {
-      embeddingStore = new EmbeddingStore(searchStore.getDatabase());
+      embeddingStore = searchStore.createEmbeddingStore();
       embeddingStore.initSchema();
       // load() is deferred to bootVault (after runFullSync) to avoid blocking the event loop
       // on first tool call with a full table scan.
-      embedProvider = new DeepSeekEmbedProvider(
-        embeddingConfig.apiKey,
-        embeddingConfig.endpoint,
-        embeddingConfig.model,
-      );
+      embedProvider = this.embedProviderFactory(embeddingConfig);
     }
 
-    const capture = captureConfig.enableCapturePipeline
-      ? new SecondBrainService({ vaultPath, ...captureConfig }, vault)
-      : null;
+    const capture =
+      captureConfig.enableCapturePipeline && this.captureFactory
+        ? this.captureFactory({ vaultPath, config: captureConfig, vault })
+        : null;
 
     const watcher = watcherConfig.enabled
       ? createVaultWatcher({ vaultPath, vaultSync, debounceMs: watcherConfig.debounceMs })
@@ -130,7 +170,6 @@ export class VaultManager {
       embedProvider,
       embeddingConfig,
       aclConfig,
-      vaultPath,
       watcher,
       bootFailed: false,
     };
@@ -147,12 +186,17 @@ export class VaultManager {
   }
 
   async shutdown(): Promise<void> {
+    // Drain in-flight syncs before closing SQLite
+    if (this.inflightSyncs.size > 0) {
+      logger.info("vault-manager", `draining ${this.inflightSyncs.size} in-flight sync(s)...`);
+      await Promise.allSettled([...this.inflightSyncs]);
+    }
     for (const [name, svc] of this.cache) {
       // Drain any in-flight boot so the DB is not closed while it's still being written to.
       await svc.bootReady.catch(() => {});
       try {
         await svc.watcher?.stop();
-        svc.searchStore.close();
+        svc.searchStore?.close();
         logger.info("vault-manager", `${name}: shut down`);
       } catch (err) {
         logger.error("vault-manager", `${name}: shutdown error`, {

@@ -1,100 +1,115 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, jest, spyOn } from "bun:test";
+import fs from "node:fs";
+import path from "node:path";
+import { logger } from "./logger.js";
+import { otelSpan, shutdownOtel } from "./otel.js";
+import { injectSdkForTest, resetOtelForTest } from "./otel-test-support.js";
 
-// otel.ts has module-level state (sdkStarted). Each describe block that calls initOtel
-// must isolate the module so the flag resets between tests.
-
-vi.mock("./logger.js", () => ({
-  logger: {
-    debug: vi.fn(),
-    info: vi.fn(),
-    warn: vi.fn(),
-    error: vi.fn(),
-  },
-}));
-
+// Tests that do not call initOtel — no module isolation needed.
 describe("otelSpan — before initOtel", () => {
-  it("returns a noop span that does not throw when end() is called", async () => {
-    const { otelSpan } = await import("./otel.js");
+  it("returns a noop span that does not throw when end() is called", () => {
     const span = otelSpan("vault_read_note", "default");
     expect(() => span.end()).not.toThrow();
     expect(() => span.end({ "tool.error": false })).not.toThrow();
   });
-});
 
-describe("initOtel — idempotency", () => {
-  beforeEach(() => {
-    vi.resetModules();
+  it("returns a callable noop (not null/undefined) before initOtel — no startup drop window", () => {
+    const span = otelSpan("vault_read_note", "default");
+    expect(span).toBeDefined();
+    expect(typeof span.end).toBe("function");
+    expect(() => span.end()).not.toThrow();
   });
 
-  afterEach(() => {
-    vi.restoreAllMocks();
+  it("keeps the OTel test reset hook out of the production module export surface [ARCH-03]", () => {
+    const source = fs.readFileSync(path.join(process.cwd(), "src/utils/otel.ts"), "utf8");
+    const testSupport = fs.readFileSync(path.join(process.cwd(), "src/utils/otel-test-support.ts"), "utf8");
+
+    expect(source).not.toContain("export function __resetForTest");
+    expect(testSupport).toContain("resetOtelForTest");
   });
 
-  it("does not re-enter init body on second call", async () => {
-    // Use a require mock that always throws so we can count entries into the try block.
-    // If sdkStarted guards correctly, require is called at most once across two initOtel calls.
-    vi.doMock("./logger.js", () => ({
-      logger: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
-    }));
-
-    const { initOtel } = await import("./otel.js");
-    const { logger } = await import("./logger.js");
-    const warnSpy = logger.warn as ReturnType<typeof vi.fn>;
-
-    // First call — will fail because OTel packages aren't installed, logs a warning
-    initOtel("http://otel:4318");
-    const warnCallsAfterFirst = warnSpy.mock.calls.length;
-
-    // Second call — sdkStarted is true, must be a no-op (no extra warn calls)
-    initOtel("http://otel:4318");
-    expect(warnSpy.mock.calls.length).toBe(warnCallsAfterFirst);
-  });
-});
-
-describe("shutdownOtel", () => {
-  beforeEach(() => {
-    vi.resetModules();
+  it("warn message for missing deps does not imply install is the only fix [ERR-12]", () => {
+    const source = fs.readFileSync(path.join(process.cwd(), "src/utils/otel.ts"), "utf8");
+    expect(source).not.toContain("install @opentelemetry");
+    expect(source).toContain("@opentelemetry/sdk-node");
   });
 
-  afterEach(() => {
-    vi.restoreAllMocks();
+  it("loads optional OTel modules via import() instead of createRequire [SEC-04] [PERF-07]", () => {
+    const source = fs.readFileSync(path.join(process.cwd(), "src/utils/otel.ts"), "utf8");
+
+    expect(source).not.toContain("createRequire");
+    expect(source).toContain('import("@opentelemetry/sdk-node")');
   });
 
-  it("resolves without throwing when OTel SDK was never initialised", async () => {
-    vi.doMock("./logger.js", () => ({
-      logger: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
-    }));
-    const { shutdownOtel } = await import("./otel.js");
-    await expect(shutdownOtel()).resolves.toBeUndefined();
+  it("resetOtelForTest is guarded from production use [SEC-01]", () => {
+    const original = process.env.NODE_ENV;
+    process.env.NODE_ENV = "production";
+    try {
+      expect(() => resetOtelForTest()).toThrow("resetOtelForTest is only available outside production");
+    } finally {
+      if (original === undefined) delete process.env.NODE_ENV;
+      else process.env.NODE_ENV = original;
+    }
   });
 });
 
-describe("initOtel — package unavailable", () => {
+describe("resetOtelForTest — correctness [QA-09]", () => {
+  afterEach(() => {
+    resetOtelForTest();
+  });
+
+  it("restores noop span behavior after reset", () => {
+    resetOtelForTest();
+    const span = otelSpan("test_tool", "default");
+    expect(typeof span.end).toBe("function");
+    expect(() => span.end()).not.toThrow();
+  });
+
+  it("is idempotent — repeated resets do not throw", () => {
+    expect(() => {
+      resetOtelForTest();
+      resetOtelForTest();
+      resetOtelForTest();
+    }).not.toThrow();
+  });
+
+  it("allows injectSdkForTest to activate sdkRef after reset", () => {
+    resetOtelForTest();
+    const mockShutdown = jest.fn().mockResolvedValue(undefined);
+    injectSdkForTest({ shutdown: mockShutdown });
+    // shutdownOtel should call the injected sdk's shutdown
+    void shutdownOtel().then(() => {
+      expect(mockShutdown).toHaveBeenCalled();
+    });
+  });
+});
+
+describe("shutdownOtel — timeout branch [QA-05]", () => {
   beforeEach(() => {
-    vi.resetModules();
+    resetOtelForTest();
+    jest.useFakeTimers();
   });
 
   afterEach(() => {
-    vi.restoreAllMocks();
+    jest.useRealTimers();
+    resetOtelForTest();
   });
 
-  it("logs the real error message (not hardcoded 'Package not found')", async () => {
-    vi.doMock("./logger.js", () => ({
-      logger: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
-    }));
+  it("resolves via timeout when SDK shutdown hangs and logs a warning", async () => {
+    const warnSpy = spyOn(logger, "warn").mockImplementation(() => {});
+    // Inject a never-resolving SDK shutdown
+    injectSdkForTest({ shutdown: () => new Promise(() => {}) });
 
-    const { initOtel } = await import("./otel.js");
-    const { logger } = await import("./logger.js");
-    const warnSpy = logger.warn as ReturnType<typeof vi.fn>;
+    const shutdownPromise = shutdownOtel();
 
-    // OTel packages aren't installed in this project — require will throw a real MODULE_NOT_FOUND.
-    initOtel("");
+    // Drain microtasks so the Promise.race starts
+    for (let i = 0; i < 10; i++) await Promise.resolve();
+    jest.advanceTimersByTime(5001);
+    for (let i = 0; i < 10; i++) await Promise.resolve();
 
-    expect(warnSpy).toHaveBeenCalledOnce();
-    const [, , extra] = warnSpy.mock.calls[0];
-    // The err field must contain the real error, not the old hardcoded string
-    expect(extra?.err).toBeDefined();
-    expect(typeof extra?.err).toBe("string");
-    expect(extra?.err).not.toBe("Package not found");
+    await shutdownPromise;
+
+    expect(warnSpy).toHaveBeenCalledWith("otel", "shutdown timed out", { timeoutMs: 5000 });
+    warnSpy.mockRestore();
   });
 });

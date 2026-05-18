@@ -14,7 +14,7 @@ interface EmbeddingResponse {
   usage?: { prompt_tokens?: number; total_tokens?: number };
 }
 
-export class DeepSeekEmbedProvider implements EmbedProvider {
+export class HttpEmbedProvider implements EmbedProvider {
   private _dimensions = 0;
 
   constructor(
@@ -35,7 +35,7 @@ export class DeepSeekEmbedProvider implements EmbedProvider {
       );
     }
 
-    const circuit = getCircuit("deepseek-embed");
+    const circuit = getCircuit("http-embed");
 
     return circuit.execute(() =>
       withRetry(
@@ -56,7 +56,11 @@ export class DeepSeekEmbedProvider implements EmbedProvider {
 
             if (!res.ok) {
               const body = await res.text().catch(() => "");
-              logger.error("embed-provider", "API error", { status: res.status, body });
+              logger.error("embed-provider", "API error", {
+                status: res.status,
+                bodyBytes: Buffer.byteLength(body, "utf8"),
+                contentType: res.headers.get("content-type") ?? undefined,
+              });
               throw new RetryableError(`Embedding API error ${res.status}`, res.status);
             }
 

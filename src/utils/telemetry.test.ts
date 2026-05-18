@@ -1,32 +1,28 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, mock, spyOn } from "bun:test";
 
-vi.mock("./metrics.js", () => ({
-  metrics: { record: vi.fn() },
-}));
-
-vi.mock("./logger.js", () => ({
-  logger: {
-    debug: vi.fn(),
-    info: vi.fn(),
-    warn: vi.fn(),
-    error: vi.fn(),
-  },
+mock.module("./metrics.js", () => ({
+  metrics: { record: mock() },
 }));
 
 import { logger } from "./logger.js";
 import { metrics } from "./metrics.js";
 import { endSpan, startSpan } from "./telemetry.js";
 
-const mockRecord = metrics.record as ReturnType<typeof vi.fn>;
-const mockLogInfo = logger.info as ReturnType<typeof vi.fn>;
-const mockLogDebug = logger.debug as ReturnType<typeof vi.fn>;
+const mockRecord = metrics.record as ReturnType<typeof mock>;
+
+let mockLogDebug: ReturnType<typeof spyOn>;
+let mockLogInfo: ReturnType<typeof spyOn>;
+let mockLogWarn: ReturnType<typeof spyOn>;
 
 beforeEach(() => {
-  vi.clearAllMocks();
+  mockRecord.mockClear();
+  mockLogDebug = spyOn(logger, "debug").mockImplementation(() => {});
+  mockLogInfo = spyOn(logger, "info").mockImplementation(() => {});
+  mockLogWarn = spyOn(logger, "warn").mockImplementation(() => {});
 });
 
 afterEach(() => {
-  vi.restoreAllMocks();
+  mock.restore();
 });
 
 describe("startSpan", () => {
@@ -107,20 +103,42 @@ describe("endSpan — error path", () => {
   it("logs status 'error'", () => {
     const span = startSpan("vault_write_note", "default");
     endSpan(span, new Error("boom"));
-    expect(mockLogInfo).toHaveBeenCalledWith("tool", "error", expect.any(Object));
+    expect(mockLogWarn).toHaveBeenCalledWith("tool", "error", expect.any(Object));
+  });
+
+  it("does not log error spans at info level", () => {
+    const span = startSpan("vault_write_note", "default");
+    endSpan(span, new Error("boom"));
+
+    expect(mockLogInfo).not.toHaveBeenCalledWith("tool", "error", expect.any(Object));
   });
 
   it("includes err message in the log for Error instances", () => {
     const span = startSpan("vault_write_note", "default");
     endSpan(span, new Error("disk full"));
-    const call = mockLogInfo.mock.calls[0];
+    const call = mockLogWarn.mock.calls[0];
     expect(call?.[2]?.err).toBe("disk full");
   });
 
   it("stringifies non-Error values in the err field", () => {
     const span = startSpan("vault_write_note", "default");
     endSpan(span, "string error");
-    const call = mockLogInfo.mock.calls[0];
+    const call = mockLogWarn.mock.calls[0];
     expect(call?.[2]?.err).toBe("string error");
+  });
+
+  it("logs Error stack traces at warn level", () => {
+    const error = new Error("disk full");
+    const span = startSpan("vault_write_note", "default");
+    endSpan(span, error);
+
+    expect(mockLogWarn).toHaveBeenCalledWith(
+      "tool",
+      "error",
+      expect.objectContaining({
+        err: "disk full",
+        stack: expect.stringContaining("Error: disk full"),
+      }),
+    );
   });
 });

@@ -1,53 +1,134 @@
-import Database from "better-sqlite3";
+import { Database, type Statement } from "bun:sqlite";
 import { logger } from "../utils/logger.js";
-import type { EmbeddingStore } from "./embeddings.js";
+import { isAclAllowed } from "../vault/path-safety.js";
+import { EmbeddingStore } from "./embeddings.js";
+import { runMigrations, VAULT_ENTRIES_MIGRATIONS } from "./migrations.js";
+import { pragmaSql, sqliteStringLiteral, vacuumIntoSql } from "./sqlite-shim-sql.js";
 import type { SearchResult, VaultEntry } from "./types.js";
 
-const CURRENT_SCHEMA_VERSION = 1;
+const STMT_CACHE_MAX = 256;
+const MEMORY_DB_PATH = ":memory:";
 
-const SCHEMA = `
-  CREATE TABLE IF NOT EXISTS schema_version (
-    id INTEGER PRIMARY KEY CHECK (id = 1),
-    version INTEGER NOT NULL
-  );
+type BackupWorkerResponse =
+  | { ok: true }
+  | { ok: false; error: { name: string; message: string; stack?: string | undefined } };
 
-  INSERT OR IGNORE INTO schema_version (id, version) VALUES (1, ${CURRENT_SCHEMA_VERSION});
+const BACKUP_WORKER_SOURCE = `
+import { Database } from "bun:sqlite";
 
-  CREATE TABLE IF NOT EXISTS vault_entries (
-    canonical_path TEXT PRIMARY KEY,
-    content TEXT NOT NULL,
-    content_hash TEXT NOT NULL,
-    file_name TEXT NOT NULL,
-    metadata TEXT NOT NULL DEFAULT '{}',
-    created_at INTEGER NOT NULL,
-    updated_at INTEGER NOT NULL
-  );
+function sqliteStringLiteral(source) {
+  if (!/^'(?:[^']|'')*'$/.test(source)) {
+    throw new Error("Expected SQLite quote() string literal");
+  }
+  return source;
+}
 
-  CREATE VIRTUAL TABLE IF NOT EXISTS vault_fts USING fts5(
-    content,
-    file_name,
-    canonical_path UNINDEXED,
-    tokenize='porter unicode61'
-  );
+self.onmessage = (event) => {
+  const { dbPath, destPath } = event.data;
+  const db = new Database(dbPath);
+  try {
+    const row = db.prepare("SELECT quote(?) AS literal").get(destPath);
+    db.exec(\`VACUUM INTO \${sqliteStringLiteral(row.literal)}\`);
+    self.postMessage({ ok: true });
+  } catch (err) {
+    self.postMessage({
+      ok: false,
+      error: {
+        name: err instanceof Error ? err.name : typeof err,
+        message: err instanceof Error ? err.message : String(err),
+        stack: err instanceof Error ? err.stack : undefined,
+      },
+    });
+  } finally {
+    db.close();
+  }
+};
 `;
 
-export class VaultSearchStore {
-  private db: Database.Database;
-  private readonly stmtGetByPath: Database.Statement;
-  private readonly stmtUpsertEntry: Database.Statement;
-  private readonly stmtDeleteEntry: Database.Statement;
-  private readonly stmtDeleteFts: Database.Statement;
-  private readonly stmtInsertFts: Database.Statement;
-  private readonly stmtCountFTS: Database.Statement;
-  private readonly stmtGetContentHashMap: Database.Statement;
-  private readonly stmtGetContentByPath: Database.Statement;
-  /** Lazy cache for dynamic-SQL statements (key = SQL string). */
-  private readonly stmtCache = new Map<string, Database.Statement>();
+const BACKUP_WORKER_URL = URL.createObjectURL(new Blob([BACKUP_WORKER_SOURCE], { type: "text/javascript" }));
 
-  constructor(dbPath: string = ":memory:") {
+export interface ISearchStore {
+  getStatementCacheSize(): number;
+  backup(destPath: string): void | Promise<void>;
+  getSchemaVersion(): number;
+  upsert(
+    canonicalPath: string,
+    content: string,
+    contentHash: string,
+    fileName: string,
+    metadata: Record<string, unknown>,
+    fileTimes?: { createdAt?: number; updatedAt?: number },
+  ): { changed: boolean };
+  searchFTS(
+    query: string,
+    limit?: number,
+    folder?: string,
+    filters?: { tags?: string[]; type?: string; modifiedAfter?: number; createdAfter?: number },
+    acl?: { allowPaths: string[]; denyPaths: string[] },
+  ): SearchResult[];
+  listTags(acl?: { allowPaths: string[]; denyPaths: string[] }): Array<{ tag: string; count: number }>;
+  listTagsPage(
+    limit: number,
+    offset: number,
+    acl?: { allowPaths: string[]; denyPaths: string[] },
+  ): { items: Array<{ tag: string; count: number }>; total: number };
+  countUniqueTags(acl?: { allowPaths: string[]; denyPaths: string[] }): number;
+  getByPath(canonicalPath: string): VaultEntry | undefined;
+  getBatchByPaths(paths: string[]): Map<string, VaultEntry>;
+  deleteByPath(canonicalPath: string): boolean;
+  listCanonicalPaths(acl?: { allowPaths: string[]; denyPaths: string[] }): string[];
+  count(acl?: { allowPaths: string[]; denyPaths: string[] }): number;
+  getContentHashMap(): Map<string, string>;
+  getContentByPath(path: string): string | undefined;
+  getContentBatchByPaths(paths: string[]): Map<string, string>;
+  getPathIndex(): Map<string, string>;
+  searchHybrid(
+    ftsQuery: string,
+    queryEmbedding: Float32Array,
+    embeddingStore: EmbeddingStore,
+    alpha: number,
+    limit: number,
+    folder?: string,
+    acl?: { allowPaths: string[]; denyPaths: string[] },
+    candidateMultiplier?: number,
+  ): SearchResult[];
+  countFTS(): number;
+  close(): void;
+}
+
+export class VaultSearchStore implements ISearchStore {
+  private db: Database;
+  private readonly dbPath: string;
+  private readonly stmtGetByPath: Statement;
+  private readonly stmtUpsertEntry: Statement;
+  private readonly stmtDeleteEntry: Statement;
+  private readonly stmtDeleteFts: Statement;
+  private readonly stmtInsertFts: Statement;
+  private readonly stmtCountFTS: Statement;
+  private readonly stmtGetSchemaVersion: Statement;
+  private readonly stmtGetContentHashMap: Statement;
+  private readonly stmtGetContentByPath: Statement;
+  private readonly stmtQuotePath: Statement;
+  /** Cached transaction functions — allocated once at construction, not per-call. */
+  private readonly txUpsert: (
+    path: string,
+    content: string,
+    hash: string,
+    name: string,
+    meta: string,
+    createdAt: number,
+    updatedAt: number,
+  ) => void;
+  private readonly txDelete: (path: string) => boolean;
+  /** Lazy cache for dynamic-SQL statements (key = SQL string). */
+  private readonly stmtCache = new Map<string, Statement>();
+  private pathIndexCache: Map<string, string> | undefined;
+
+  constructor(dbPath: string = MEMORY_DB_PATH) {
+    this.dbPath = dbPath;
     this.db = new Database(dbPath);
-    this.db.pragma("journal_mode = WAL");
-    this.db.exec(SCHEMA);
+    this.enableWalMode();
+    runMigrations(this.db, VAULT_ENTRIES_MIGRATIONS, "schema_version");
 
     this.stmtGetByPath = this.db.prepare("SELECT * FROM vault_entries WHERE canonical_path = ?");
     this.stmtUpsertEntry = this.db.prepare(
@@ -58,35 +139,122 @@ export class VaultSearchStore {
     this.stmtDeleteFts = this.db.prepare("DELETE FROM vault_fts WHERE canonical_path = ?");
     this.stmtInsertFts = this.db.prepare("INSERT INTO vault_fts (content, file_name, canonical_path) VALUES (?, ?, ?)");
     this.stmtCountFTS = this.db.prepare("SELECT COUNT(*) as n FROM vault_fts");
+    this.stmtGetSchemaVersion = this.db.prepare("SELECT version FROM schema_version WHERE id = 1");
     this.stmtGetContentHashMap = this.db.prepare("SELECT canonical_path, content_hash FROM vault_entries");
     this.stmtGetContentByPath = this.db.prepare("SELECT content FROM vault_entries WHERE canonical_path = ?");
+    this.stmtQuotePath = this.db.prepare("SELECT quote(?) AS literal");
+
+    const stmtUpsertEntry = this.stmtUpsertEntry;
+    const stmtDeleteFts = this.stmtDeleteFts;
+    const stmtInsertFts = this.stmtInsertFts;
+    const stmtDeleteEntry = this.stmtDeleteEntry;
+    this.txUpsert = this.db.transaction(
+      (
+        path: string,
+        content: string,
+        hash: string,
+        name: string,
+        meta: string,
+        createdAt: number,
+        updatedAt: number,
+      ) => {
+        stmtUpsertEntry.run(path, content, hash, name, meta, createdAt, updatedAt);
+        stmtDeleteFts.run(path);
+        stmtInsertFts.run(content, name, path);
+      },
+    );
+    this.txDelete = this.db.transaction((path: string): boolean => {
+      const result = stmtDeleteEntry.run(path);
+      stmtDeleteFts.run(path);
+      return result.changes > 0;
+    });
   }
 
-  private cachedPrepare(sql: string): Database.Statement {
+  private cachedPrepare(sql: string): Statement {
     let stmt = this.stmtCache.get(sql);
-    if (!stmt) {
-      stmt = this.db.prepare(sql);
+    if (stmt) {
+      this.stmtCache.delete(sql);
       this.stmtCache.set(sql, stmt);
+      return stmt;
+    }
+    stmt = this.db.prepare(sql);
+    this.stmtCache.set(sql, stmt);
+    if (this.stmtCache.size > STMT_CACHE_MAX) {
+      const oldestKey = this.stmtCache.keys().next().value;
+      if (oldestKey !== undefined) this.stmtCache.delete(oldestKey);
     }
     return stmt;
   }
 
-  /** Expose the underlying database for shared use (e.g. EmbeddingStore). */
-  getDatabase(): Database.Database {
-    return this.db;
+  getStatementCacheSize(): number {
+    return this.stmtCache.size;
+  }
+
+  private enableWalMode(): void {
+    try {
+      const row = this.db.prepare(pragmaSql("journal_mode = WAL")).get() as { journal_mode?: string } | undefined;
+      const journalMode = row?.journal_mode?.toLowerCase() ?? "unknown";
+      if (this.dbPath !== MEMORY_DB_PATH && journalMode !== "wal") {
+        logger.warn("sqlite-shim", "WAL journal mode was not enabled", { dbPath: this.dbPath, journalMode });
+      }
+    } catch (err) {
+      logger.warn("sqlite-shim", "WAL journal mode pragma failed", {
+        dbPath: this.dbPath,
+        err: err instanceof Error ? err.message : String(err),
+      });
+      throw err;
+    }
+  }
+
+  backup(destPath: string): void | Promise<void> {
+    // Bun blocking backup path — VACUUM INTO (no online backup API in bun:sqlite)
+    logger.info("sqlite-shim", "backup started", { destPath });
+    try {
+      if (this.dbPath === MEMORY_DB_PATH) {
+        this.backupWithConnection(destPath);
+        logger.info("sqlite-shim", "backup finished", { destPath });
+        return;
+      }
+      return backupFileDatabaseInWorker(this.dbPath, destPath)
+        .then(() => {
+          logger.info("sqlite-shim", "backup finished", { destPath });
+        })
+        .catch((err) => {
+          logger.error("sqlite-shim", "backup failed", {
+            destPath,
+            err: err instanceof Error ? err.message : String(err),
+          });
+          throw err;
+        });
+    } catch (err) {
+      logger.error("sqlite-shim", "backup failed", {
+        destPath,
+        err: err instanceof Error ? err.message : String(err),
+      });
+      throw err;
+    }
+  }
+
+  private backupWithConnection(destPath: string): void {
+    const row = this.stmtQuotePath.get(destPath) as { literal: string };
+    this.db.exec(vacuumIntoSql(sqliteStringLiteral(row.literal)));
+  }
+
+  createEmbeddingStore(): EmbeddingStore {
+    return new EmbeddingStore(this.db);
   }
 
   getSchemaVersion(): number {
     try {
-      const row = this.db.prepare("SELECT version FROM schema_version WHERE id = 1").get() as
-        | { version: number }
-        | undefined;
+      const row = this.stmtGetSchemaVersion.get() as { version: number } | undefined;
       return row?.version ?? 0;
-    } catch {
-      return 0;
+    } catch (err) {
+      if (isMissingSchemaVersionTableError(err)) {
+        return 0;
+      }
+      throw err;
     }
   }
-
   upsert(
     canonicalPath: string,
     content: string,
@@ -105,20 +273,18 @@ export class VaultSearchStore {
     const createdAt = existing?.created_at ?? fileTimes?.createdAt ?? now;
     const updatedAt = fileTimes?.updatedAt ?? now;
 
-    this.db.transaction(() => {
-      this.stmtUpsertEntry.run(
-        canonicalPath,
-        content,
-        contentHash,
-        fileName,
-        JSON.stringify(metadata),
-        createdAt,
-        updatedAt,
-      );
-      this.stmtDeleteFts.run(canonicalPath);
-      this.stmtInsertFts.run(content, fileName, canonicalPath);
-    })();
+    try {
+      this.txUpsert(canonicalPath, content, contentHash, fileName, JSON.stringify(metadata), createdAt, updatedAt);
+    } catch (err) {
+      logger.error("store", "upsert transaction failed", {
+        path: canonicalPath,
+        code: sqliteErrorCode(err),
+        err: err instanceof Error ? err.message : String(err),
+      });
+      throw err;
+    }
 
+    if (!existing) this.pathIndexCache = undefined;
     return { changed: true };
   }
 
@@ -206,14 +372,32 @@ export class VaultSearchStore {
   }
 
   listTags(acl?: { allowPaths: string[]; denyPaths: string[] }): Array<{ tag: string; count: number }> {
+    return this.listTagsPage(Number.MAX_SAFE_INTEGER, 0, acl).items;
+  }
+
+  listTagsPage(
+    limit: number,
+    offset: number,
+    acl?: { allowPaths: string[]; denyPaths: string[] },
+  ): { items: Array<{ tag: string; count: number }>; total: number } {
     const { clauses, params } = buildAclClauses(acl, "canonical_path");
     const where = clauses ? `AND ${clauses}` : "";
     const sql = `SELECT json_each.value AS tag, COUNT(*) AS count
          FROM vault_entries, json_each(json_extract(metadata, '$.tags'))
          WHERE json_extract(metadata, '$.tags') IS NOT NULL ${where}
          GROUP BY tag
-         ORDER BY count DESC`;
-    return this.cachedPrepare(sql).all(...params) as Array<{ tag: string; count: number }>;
+         ORDER BY count DESC
+         LIMIT ? OFFSET ?`;
+    const countSql = `SELECT COUNT(*) AS count FROM (
+         SELECT json_each.value AS tag
+         FROM vault_entries, json_each(json_extract(metadata, '$.tags'))
+         WHERE json_extract(metadata, '$.tags') IS NOT NULL ${where}
+         GROUP BY tag
+       )`;
+    return {
+      items: this.cachedPrepare(sql).all(...params, limit, offset) as Array<{ tag: string; count: number }>,
+      total: (this.cachedPrepare(countSql).get(...params) as { count: number }).count,
+    };
   }
 
   countUniqueTags(acl?: { allowPaths: string[]; denyPaths: string[] }): number {
@@ -232,19 +416,14 @@ export class VaultSearchStore {
 
   getBatchByPaths(paths: string[]): Map<string, VaultEntry> {
     if (paths.length === 0) return new Map();
-    const placeholders = paths.map(() => "?").join(",");
-    const sql = `SELECT * FROM vault_entries WHERE canonical_path IN (${placeholders})`;
-    const rows = this.cachedPrepare(sql).all(...paths) as DatabaseRow[];
+    const sql = "SELECT * FROM vault_entries WHERE canonical_path IN (SELECT value FROM json_each(?))";
+    const rows = this.cachedPrepare(sql).all(JSON.stringify(paths)) as DatabaseRow[];
     return new Map(rows.map((r) => [r.canonical_path, rowToEntry(r)]));
   }
 
   deleteByPath(canonicalPath: string): boolean {
-    let deleted = false;
-    this.db.transaction(() => {
-      const result = this.stmtDeleteEntry.run(canonicalPath);
-      this.stmtDeleteFts.run(canonicalPath);
-      deleted = result.changes > 0;
-    })();
+    const deleted = this.txDelete(canonicalPath);
+    if (deleted) this.pathIndexCache = undefined;
     return deleted;
   }
 
@@ -278,6 +457,32 @@ export class VaultSearchStore {
     return (this.stmtGetContentByPath.get(path) as { content: string } | undefined)?.content;
   }
 
+  getContentBatchByPaths(paths: string[]): Map<string, string> {
+    if (paths.length === 0) return new Map();
+    const sql =
+      "SELECT canonical_path, content FROM vault_entries WHERE canonical_path IN (SELECT value FROM json_each(?))";
+    const rows = this.cachedPrepare(sql).all(JSON.stringify(paths)) as Array<{
+      canonical_path: string;
+      content: string;
+    }>;
+    return new Map(rows.map((r) => [r.canonical_path, r.content]));
+  }
+
+  getPathIndex(): Map<string, string> {
+    if (this.pathIndexCache) return this.pathIndexCache;
+    const pathIndex = new Map<string, string>();
+    for (const path of this.listCanonicalPaths()) {
+      const stem = path.replace(/\.md$/, "").split("/").pop() ?? "";
+      if (stem && !pathIndex.has(stem)) {
+        pathIndex.set(stem, path);
+      }
+      pathIndex.set(path.replace(/\.md$/, ""), path);
+      pathIndex.set(path, path);
+    }
+    this.pathIndexCache = pathIndex;
+    return pathIndex;
+  }
+
   searchHybrid(
     ftsQuery: string,
     queryEmbedding: Float32Array,
@@ -286,20 +491,23 @@ export class VaultSearchStore {
     limit: number,
     folder?: string,
     acl?: { allowPaths: string[]; denyPaths: string[] },
+    candidateMultiplier = 2,
   ): SearchResult[] {
+    const candidateLimit = limit * candidateMultiplier;
     // Get FTS results — ACL conditions applied in SQL so LIMIT is taken from allowed rows only
-    const ftsResults = this.searchFTS(ftsQuery, limit * 2, folder, undefined, acl);
+    const ftsResults = this.searchFTS(ftsQuery, candidateLimit, folder, undefined, acl);
 
-    // Get vector results — use full pool when ACL is active so lower-ranked allowed paths are reachable
-    const vectorCandidateCount =
-      acl && (acl.allowPaths.length > 0 || acl.denyPaths.length > 0) ? embeddingStore.size : limit * 2;
-    let vectorResults = embeddingStore.search(queryEmbedding, vectorCandidateCount);
-
-    // Apply folder filter to vector results if specified
+    let pathFilter: ((path: string) => boolean) | undefined;
     if (folder) {
       const prefix = folder.endsWith("/") ? folder : `${folder}/`;
-      vectorResults = vectorResults.filter((r) => r.path.startsWith(prefix));
+      pathFilter = (path) => path.startsWith(prefix);
     }
+    if (acl && (acl.allowPaths.length > 0 || acl.denyPaths.length > 0)) {
+      const previousFilter = pathFilter;
+      pathFilter = (path) => (!previousFilter || previousFilter(path)) && isAclAllowed(path, acl);
+    }
+
+    const vectorResults = embeddingStore.search(queryEmbedding, candidateLimit, pathFilter);
 
     // If no vector results, fall back to FTS-only
     if (vectorResults.length === 0) {
@@ -439,7 +647,7 @@ function buildAclClauses(
     const normalized = acl.allowPaths
       .map((raw) => raw.replace(/\\/g, "/").replace(/^\/+/, "").replace(/\/+$/, ""))
       .filter((p) => p !== "");
-    if (normalized.length === acl.allowPaths.length) {
+    if (normalized.length > 0) {
       const clauses = normalized.map(() => `${col} = ? OR substr(${col}, 1, ?) = ?`).join(" OR ");
       parts.push(`(${clauses})`);
       for (const p of normalized) {
@@ -454,6 +662,45 @@ function buildAclClauses(
 /** Escape SQL LIKE special characters so user-supplied folder paths are matched literally. */
 function escapeLike(s: string): string {
   return s.replace(/[%_\\]/g, "\\$&");
+}
+
+function backupFileDatabaseInWorker(dbPath: string, destPath: string): Promise<void> {
+  const worker = new Worker(BACKUP_WORKER_URL, { type: "module" });
+
+  return new Promise((resolve, reject) => {
+    const cleanup = () => {
+      worker.terminate();
+    };
+
+    worker.onmessage = (event: MessageEvent<BackupWorkerResponse>) => {
+      cleanup();
+      if (event.data.ok) {
+        resolve();
+        return;
+      }
+      const err = new Error(event.data.error.message);
+      err.name = event.data.error.name;
+      if (event.data.error.stack) err.stack = event.data.error.stack;
+      reject(err);
+    };
+
+    worker.onerror = (event: ErrorEvent) => {
+      cleanup();
+      reject(event.error instanceof Error ? event.error : new Error(event.message));
+    };
+
+    worker.postMessage({ dbPath, destPath });
+  });
+}
+
+function isMissingSchemaVersionTableError(err: unknown): boolean {
+  return err instanceof Error && /no such table: schema_version/i.test(err.message);
+}
+
+function sqliteErrorCode(err: unknown): string | undefined {
+  if (typeof err !== "object" || err === null) return undefined;
+  const code = (err as { code?: unknown }).code;
+  return typeof code === "string" ? code : undefined;
 }
 
 /**

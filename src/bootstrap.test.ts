@@ -1,22 +1,26 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, mock, spyOn } from "bun:test";
 
 // ── Module mocks ──────────────────────────────────────────────────────────────
 
-vi.mock("node:fs/promises", () => ({
-  default: { stat: vi.fn() },
-  stat: vi.fn(),
+mock.module("node:fs/promises", () => ({
+  default: { stat: mock() },
+  stat: mock(),
 }));
 
-vi.mock("./config.js", () => ({
-  loadConfig: vi.fn(),
+mock.module("./config.js", () => ({
+  loadConfig: mock(),
 }));
 
-vi.mock("./utils/otel.js", () => ({
-  initOtel: vi.fn(),
+mock.module("./utils/otel.js", () => ({
+  initOtel: mock(),
 }));
 
-vi.mock("./vault/manager.js", () => ({
-  VaultManager: vi.fn(),
+mock.module("./utils/alert.js", () => ({
+  sendAlert: mock(),
+}));
+
+mock.module("./vault/manager.js", () => ({
+  VaultManager: mock(),
 }));
 
 // ── Imports after mocks ───────────────────────────────────────────────────────
@@ -24,6 +28,7 @@ vi.mock("./vault/manager.js", () => ({
 import fs from "node:fs/promises";
 import { bootstrap } from "./bootstrap.js";
 import { loadConfig } from "./config.js";
+import { sendAlert } from "./utils/alert.js";
 import { initOtel } from "./utils/otel.js";
 import { VaultManager } from "./vault/manager.js";
 
@@ -35,14 +40,17 @@ function makeConfig(overrides: Record<string, unknown> = {}) {
     watcher: { enabled: false, debounceMs: 300 },
     enableOtel: false,
     otelEndpoint: "",
+    mcpHost: "127.0.0.1",
+    mcpApiKey: "",
     ...overrides,
   };
 }
 
-const mockStat = fs.stat as ReturnType<typeof vi.fn>;
-const mockLoadConfig = loadConfig as ReturnType<typeof vi.fn>;
-const mockInitOtel = initOtel as ReturnType<typeof vi.fn>;
-const MockVaultManager = VaultManager as ReturnType<typeof vi.fn>;
+const mockStat = fs.stat as ReturnType<typeof mock>;
+const mockLoadConfig = loadConfig as ReturnType<typeof mock>;
+const mockSendAlert = sendAlert as ReturnType<typeof mock>;
+const mockInitOtel = initOtel as ReturnType<typeof mock>;
+const MockVaultManager = VaultManager as ReturnType<typeof mock>;
 
 const mockSvc = {
   vault: {},
@@ -60,16 +68,21 @@ const mockSvc = {
 };
 
 beforeEach(() => {
-  vi.clearAllMocks();
+  mock.restore();
+  mockStat.mockClear();
+  mockLoadConfig.mockClear();
+  mockSendAlert.mockClear();
+  mockInitOtel.mockClear();
+  MockVaultManager.mockClear();
   mockLoadConfig.mockReturnValue(makeConfig());
   mockStat.mockResolvedValue({ isDirectory: () => true });
   MockVaultManager.mockImplementation(() => ({
-    getServices: vi.fn().mockReturnValue(mockSvc),
+    getServices: mock().mockReturnValue(mockSvc),
   }));
 });
 
 afterEach(() => {
-  vi.restoreAllMocks();
+  mock.restore();
 });
 
 // ── Happy path ────────────────────────────────────────────────────────────────
@@ -109,6 +122,21 @@ describe("bootstrap vault path validation", () => {
     await expect(bootstrap()).rejects.toThrow("Vault path does not exist");
   });
 
+  it("sends an alert when boot validation fails and webhook is configured", async () => {
+    mockLoadConfig.mockReturnValue(makeConfig({ alertWebhookUrl: "http://alerts.example.test/hook" }));
+    mockStat.mockRejectedValueOnce(Object.assign(new Error("ENOENT"), { code: "ENOENT" }));
+
+    await expect(bootstrap()).rejects.toThrow("Vault path does not exist");
+
+    expect(mockSendAlert).toHaveBeenCalledWith(
+      expect.objectContaining({
+        webhookUrl: "http://alerts.example.test/hook",
+        level: "error",
+        source: "bootstrap",
+      }),
+    );
+  });
+
   it("throws 'does not exist' for non-ENOENT stat failures (e.g. EACCES)", async () => {
     mockStat.mockRejectedValueOnce(Object.assign(new Error("EACCES: permission denied"), { code: "EACCES" }));
     await expect(bootstrap()).rejects.toThrow("Vault path does not exist");
@@ -139,15 +167,19 @@ describe("bootstrap vault path validation", () => {
 
 describe("bootstrap embedding config warning", () => {
   it("logs a warning when embeddings enabled but API key is missing", async () => {
-    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const spy = spyOn(console, "error").mockImplementation(() => {});
     mockLoadConfig.mockReturnValue(makeConfig({ embedding: { enabled: true, apiKey: "" } }));
     await bootstrap();
-    expect(spy).toHaveBeenCalledWith(expect.stringContaining("EMBEDDING_API_KEY"));
+    // logger.warn calls console.error with (prefix, message) args
+    expect(spy).toHaveBeenCalledWith(
+      expect.stringContaining("[bootstrap]"),
+      expect.stringContaining("EMBEDDING_API_KEY"),
+    );
     spy.mockRestore();
   });
 
   it("does not warn when embeddings enabled and API key is set", async () => {
-    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const spy = spyOn(console, "error").mockImplementation(() => {});
     mockLoadConfig.mockReturnValue(makeConfig({ embedding: { enabled: true, apiKey: "sk-test-123" } }));
     await bootstrap();
     expect(spy).not.toHaveBeenCalled();
@@ -155,7 +187,7 @@ describe("bootstrap embedding config warning", () => {
   });
 
   it("does not warn when embeddings are disabled", async () => {
-    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const spy = spyOn(console, "error").mockImplementation(() => {});
     mockLoadConfig.mockReturnValue(makeConfig({ embedding: { enabled: false, apiKey: "" } }));
     await bootstrap();
     expect(spy).not.toHaveBeenCalled();

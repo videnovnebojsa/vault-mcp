@@ -2,8 +2,10 @@ pre-commit:
   parallel: true
   commands:
     biome:
-      run: npx biome check --write {staged_files} && git add {staged_files}
-      glob: "*.{ts,js,json}"
+      run: bunx biome check --write {staged_files} && git add {staged_files}
+      glob: "*.{ts,js,json,toml}"
+    gitleaks:
+      run: gitleaks protect --staged --redact --config .gitleaks.toml
 
 commit-msg:
   commands:
@@ -13,6 +15,6 @@ commit-msg:
 pre-push:
   commands:
     typecheck:
-      run: pnpm tsc --noEmit
+      run: bun tsc --noEmit
     test:
-      run: pnpm test
+      run: bun test --isolate

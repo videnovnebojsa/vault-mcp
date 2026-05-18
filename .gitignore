@@ -1,5 +1,6 @@
 node_modules/
 dist/
+dist-bin/
 coverage/
 logs/
 *.log
@@ -12,6 +13,14 @@ logs/
 # Claude Code personal workflow — not for public repo
 .claude/
 CLAUDE.md
+
+# Dev-workflow artifacts — not for public repo
+TODO.md
+BACKLOG.md
+VERIFICATION.md
+KNOWN_DEBT.md
+REVIEW.md
+.codex/
 
 # macOS
 .DS_Store

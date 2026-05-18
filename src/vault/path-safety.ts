@@ -1,17 +1,18 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { VaultError, VaultErrorCode } from "../utils/errors.js";
 import type { AclConfig } from "./types.js";
 
-export class PathTraversalError extends Error {
+export class PathTraversalError extends VaultError {
   constructor(message: string) {
-    super(message);
+    super(message, VaultErrorCode.PATH_TRAVERSAL);
     this.name = "PathTraversalError";
   }
 }
 
-export class AclViolationError extends Error {
+export class AclViolationError extends VaultError {
   constructor(message: string) {
-    super(message);
+    super(message, VaultErrorCode.ACL_VIOLATION);
     this.name = "AclViolationError";
   }
 }
@@ -38,8 +39,8 @@ export function resolveVaultPath(root: string, relative: string): string {
  * For existing paths, checks realpath of the file. For new paths, checks realpath of
  * the nearest existing ancestor.
  */
-export async function assertRealPathSafe(root: string, absPath: string): Promise<void> {
-  const realRoot = await fs.realpath(root);
+export async function assertRealPathSafe(root: string, absPath: string, knownRealRoot?: string): Promise<void> {
+  const realRoot = knownRealRoot ?? (await fs.realpath(root));
 
   // Walk up to find the nearest existing ancestor
   let check = absPath;

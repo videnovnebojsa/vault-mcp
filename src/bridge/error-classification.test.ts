@@ -1,6 +1,6 @@
+import { describe, expect, it } from "bun:test";
 import { StreamableHTTPError } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { ErrorCode } from "@modelcontextprotocol/sdk/types.js";
-import { describe, expect, it } from "vitest";
 
 import { classifyTransportError, type ErrorClassification, type FailureKind } from "./stdio-http-bridge.js";
 

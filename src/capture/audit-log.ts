@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { resolveVaultPath } from "../vault/path-safety.js";
+import { assertRealPathSafe, resolveVaultPath } from "../vault/path-safety.js";
 import { buildAuditLogPath } from "./filename.js";
 import type { CaptureClassification } from "./types.js";
 
@@ -12,6 +12,7 @@ export async function appendClassificationLog(
 ): Promise<void> {
   const logRelPath = buildAuditLogPath();
   const absPath = resolveVaultPath(vaultPath, logRelPath);
+  await assertRealPathSafe(vaultPath, absPath);
 
   // Ensure parent directory exists
   await fs.mkdir(path.dirname(absPath), { recursive: true });

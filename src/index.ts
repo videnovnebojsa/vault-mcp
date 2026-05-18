@@ -1,5 +1,6 @@
 import { bootstrap } from "./bootstrap.js";
 import { type HttpServerHandle, startHttpServer } from "./http.js";
+import { createShutdown } from "./shutdown.js";
 import { logger } from "./utils/logger.js";
 import { shutdownOtel } from "./utils/otel.js";
 
@@ -18,28 +19,17 @@ try {
   process.exit(1);
 }
 
-const SHUTDOWN_TIMEOUT_MS = 10_000;
-const shutdown = async () => {
-  const forceExit = setTimeout(() => {
-    logger.error("index", "shutdown timed out, forcing exit");
-    process.exit(1);
-  }, SHUTDOWN_TIMEOUT_MS);
-  forceExit.unref();
-
-  try {
+const shutdown = createShutdown({
+  logger,
+  exit: (code) => process.exit(code),
+  cleanup: async () => {
     await httpHandle.close();
     await boot.vaultManager.shutdown();
     await shutdownOtel().catch((e) =>
       logger.warn("index", "otel flush error", { err: e instanceof Error ? e.message : String(e) }),
     );
-  } catch (err) {
-    logger.error("index", "error during shutdown cleanup", {
-      stack: err instanceof Error ? (err.stack ?? err.message) : String(err),
-    });
-  }
-  clearTimeout(forceExit);
-  process.exit(0);
-};
+  },
+});
 
 process.on("SIGINT", shutdown);
 process.on("SIGTERM", shutdown);

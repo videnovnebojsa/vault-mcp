@@ -45,7 +45,13 @@ export interface WriteNoteInput {
 export interface ListFolderOptions {
   recursive?: boolean;
   limit?: number;
+  offset?: number;
   modifiedAfter?: number; // epoch ms — only return notes with updatedAt >= this
+}
+
+export interface ListFolderPage {
+  items: VaultNoteSummary[];
+  total: number;
 }
 
 export interface SearchOptions {

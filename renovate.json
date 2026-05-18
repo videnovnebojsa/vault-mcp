@@ -1,0 +1,20 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": ["config:recommended"],
+  "schedule": ["before 6am on Monday"],
+  "minimumReleaseAge": "10 days",
+  "packageRules": [
+    {
+      "matchDepTypes": ["devDependencies"],
+      "matchUpdateTypes": ["minor", "patch"],
+      "automerge": true,
+      "stabilityDays": 10
+    },
+    {
+      "matchManagers": ["github-actions"],
+      "automerge": true,
+      "pinDigests": true,
+      "stabilityDays": 10
+    }
+  ]
+}

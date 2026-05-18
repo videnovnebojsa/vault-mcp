@@ -223,9 +223,12 @@ export class StdioHttpBridge {
     };
 
     this.upstream.onerror = (err) => {
-      // The send() rejection path owns classification. Log here at debug only
-      // to avoid double-classifying the same failure.
-      this.log.debug("upstream onerror", { err: err.message });
+      const cls = this.classify(err);
+      this.log[cls.logLevel]("upstream transport error", {
+        kind: cls.kind,
+        httpStatus: cls.httpStatus,
+        reason: cls.reason,
+      });
     };
 
     this.downstream.onerror = (err) => {

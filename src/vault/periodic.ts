@@ -1,4 +1,4 @@
-import type { VaultRepository } from "./repository.js";
+import type { IVaultRepository } from "./repository-interface.js";
 import type { VaultNote } from "./types.js";
 
 export type Period = "daily" | "weekly" | "monthly";
@@ -30,7 +30,7 @@ export function buildPeriodicPath(period: Period, date: Date, root: string): str
 }
 
 export async function openOrCreatePeriodicNote(
-  vault: VaultRepository,
+  vault: IVaultRepository,
   period: Period,
   date: Date,
   root: string,

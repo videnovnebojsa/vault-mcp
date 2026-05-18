@@ -1,6 +1,6 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, mock, spyOn } from "bun:test";
 import { resetAllCircuits } from "../utils/circuits.js";
-import { DeepSeekEmbedProvider, MockEmbedProvider } from "./embed-provider.js";
+import { HttpEmbedProvider, MockEmbedProvider } from "./embed-provider.js";
 
 describe("MockEmbedProvider", () => {
   it("returns vectors of correct dimensions", async () => {
@@ -37,33 +37,32 @@ describe("MockEmbedProvider", () => {
   });
 });
 
-describe("DeepSeekEmbedProvider", () => {
-  const makeProvider = () =>
-    new DeepSeekEmbedProvider("sk-test", "https://api.example.com/v1", "text-embedding-3-small");
+describe("HttpEmbedProvider", () => {
+  const makeProvider = () => new HttpEmbedProvider("sk-test", "https://api.example.com/v1", "text-embedding-3-small");
 
   beforeEach(() => {
     resetAllCircuits();
   });
 
   afterEach(() => {
-    vi.restoreAllMocks();
+    mock.restore();
     resetAllCircuits();
   });
 
   it("returns empty array for empty input without calling fetch", async () => {
-    const spy = vi.spyOn(globalThis, "fetch");
+    const spy = spyOn(globalThis, "fetch");
     const result = await makeProvider().embed([]);
     expect(result).toHaveLength(0);
     expect(spy).not.toHaveBeenCalled();
   });
 
   it("throws when EMBEDDING_ENDPOINT is empty", async () => {
-    const provider = new DeepSeekEmbedProvider("sk-test", "", "model");
+    const provider = new HttpEmbedProvider("sk-test", "", "model");
     await expect(provider.embed(["hello"])).rejects.toThrow("EMBEDDING_ENDPOINT");
   });
 
   it("returns Float32Array vectors on success", async () => {
-    vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
+    spyOn(globalThis, "fetch").mockResolvedValueOnce(
       new Response(
         JSON.stringify({
           data: [{ embedding: [0.1, 0.2, 0.3], index: 0 }],
@@ -79,7 +78,7 @@ describe("DeepSeekEmbedProvider", () => {
   });
 
   it("sets dimensions from first response", async () => {
-    vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
+    spyOn(globalThis, "fetch").mockResolvedValueOnce(
       new Response(
         JSON.stringify({
           data: [{ embedding: [0.1, 0.2, 0.3], index: 0 }],
@@ -95,21 +94,31 @@ describe("DeepSeekEmbedProvider", () => {
   });
 
   it("throws a RetryableError on non-ok HTTP response", async () => {
-    // Use a network-level error (non-retryable) so withRetry exits immediately.
-    vi.spyOn(globalThis, "fetch").mockRejectedValueOnce(
-      Object.assign(new Error("fetch failed"), { name: "TypeError" }),
-    );
+    // Use AbortError (non-retryable in withRetry) so the test exits immediately without retry delays.
+    const err = Object.assign(new Error("fetch failed"), { name: "AbortError" });
+    spyOn(globalThis, "fetch").mockRejectedValueOnce(err);
     await expect(makeProvider().embed(["test"])).rejects.toThrow(/fetch failed/i);
   });
 
   it("propagates 400 client errors immediately (non-retryable)", async () => {
-    vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(new Response("bad request", { status: 400 }));
+    spyOn(globalThis, "fetch").mockResolvedValueOnce(new Response("bad request", { status: 400 }));
     await expect(makeProvider().embed(["test"])).rejects.toThrow(/400/);
+  });
+
+  it("does not log the embedding API error body verbatim", async () => {
+    const errorSpy = spyOn(console, "error").mockImplementation(() => {});
+    spyOn(globalThis, "fetch").mockResolvedValueOnce(
+      new Response("upstream secret body: sk-live-sensitive-token", { status: 400 }),
+    );
+
+    await expect(makeProvider().embed(["test"])).rejects.toThrow(/400/);
+
+    expect(JSON.stringify(errorSpy.mock.calls)).not.toContain("sk-live-sensitive-token");
   });
 
   it("rejects immediately when circuit is open (no fetch called)", async () => {
     const { getCircuit } = await import("../utils/circuits.js");
-    const circuit = getCircuit("deepseek-embed");
+    const circuit = getCircuit("http-embed");
 
     // Open the circuit by manually recording failures
     for (let i = 0; i < 5; i++) {
@@ -121,7 +130,7 @@ describe("DeepSeekEmbedProvider", () => {
       (circuit as any)._openedAt = Date.now();
     }
 
-    const spy = vi.spyOn(globalThis, "fetch");
+    const spy = spyOn(globalThis, "fetch");
     await expect(makeProvider().embed(["hello"])).rejects.toThrow(/Circuit/i);
     expect(spy).not.toHaveBeenCalled();
   });

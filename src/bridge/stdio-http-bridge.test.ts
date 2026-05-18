@@ -1,6 +1,6 @@
+import { afterEach, beforeEach, describe, expect, it, mock } from "bun:test";
 import { StreamableHTTPError } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { ErrorCode, JSONRPCErrorResponseSchema, type JSONRPCMessage } from "@modelcontextprotocol/sdk/types.js";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChildLogger } from "../utils/logger.js";
 import {
   type BridgeTransport,
@@ -10,9 +10,9 @@ import {
 } from "./stdio-http-bridge.js";
 
 class FakeTransport implements BridgeTransport {
-  start = vi.fn(async () => {});
-  close = vi.fn(async () => {});
-  send = vi.fn<(msg: JSONRPCMessage) => Promise<void>>(async () => {});
+  start = mock(async () => {});
+  close = mock(async () => {});
+  send = mock<(msg: JSONRPCMessage) => Promise<void>>(async () => {});
   onmessage?: (msg: JSONRPCMessage) => void;
   onclose?: () => void;
   onerror?: (err: Error) => void;
@@ -52,7 +52,7 @@ const RESPONSE: JSONRPCMessage = { jsonrpc: "2.0", id: 1, result: { tools: [] } 
 describe("StdioHttpBridge", () => {
   let upstream: FakeTransport;
   let downstream: FakeTransport;
-  let onTerminate: ReturnType<typeof vi.fn>;
+  let onTerminate: ReturnType<typeof mock>;
   let log: ReturnType<typeof makeLogger>;
 
   function makeBridge(opts?: {
@@ -68,12 +68,12 @@ describe("StdioHttpBridge", () => {
   beforeEach(() => {
     upstream = new FakeTransport();
     downstream = new FakeTransport();
-    onTerminate = vi.fn(async () => {});
+    onTerminate = mock(async () => {});
     log = makeLogger();
   });
 
   afterEach(() => {
-    vi.restoreAllMocks();
+    mock.restore();
   });
 
   it("forwards a request successfully and the upstream response is forwarded back", async () => {
@@ -269,7 +269,7 @@ describe("StdioHttpBridge", () => {
     expect(log.calls.some((c) => c.level === "error" && /forward to downstream failed/.test(c.message))).toBe(true);
   });
 
-  it("upstream.onerror only logs at debug (does not double-classify)", async () => {
+  it("upstream.onerror does not emit a JSON-RPC response or close", async () => {
     const bridge = makeBridge();
     await bridge.start();
     upstream.onerror?.(new StreamableHTTPError(404, "Session not found"));
@@ -277,7 +277,26 @@ describe("StdioHttpBridge", () => {
 
     expect(downstream.send).not.toHaveBeenCalled();
     expect(onTerminate).not.toHaveBeenCalled();
-    expect(log.calls.some((c) => c.level === "debug" && /upstream onerror/.test(c.message))).toBe(true);
+    expect(log.calls.some((c) => c.message === "upstream transport error")).toBe(true);
+  });
+
+  it("upstream.onerror logs a classified transport error without closing the bridge [ERR-02]", async () => {
+    const bridge = makeBridge();
+    await bridge.start();
+    upstream.onerror?.(new StreamableHTTPError(503, "service unavailable"));
+    await flush();
+
+    expect(onTerminate).not.toHaveBeenCalled();
+    expect(upstream.close).not.toHaveBeenCalled();
+    expect(log.calls).toContainEqual({
+      level: "warn",
+      message: "upstream transport error",
+      extra: {
+        kind: "http-server-error",
+        httpStatus: 503,
+        reason: "Upstream HTTP 503",
+      },
+    });
   });
 
   it("preserves string id verbatim in error response", async () => {
@@ -295,11 +314,11 @@ describe("StdioHttpBridge", () => {
 
   it("start() awaits upstream.start before downstream.start", async () => {
     const order: string[] = [];
-    upstream.start = vi.fn(async () => {
+    upstream.start = mock(async () => {
       await new Promise((r) => setTimeout(r, 5));
       order.push("upstream");
     });
-    downstream.start = vi.fn(async () => {
+    downstream.start = mock(async () => {
       order.push("downstream");
     });
     const bridge = makeBridge();

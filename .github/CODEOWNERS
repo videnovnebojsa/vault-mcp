@@ -1,0 +1,8 @@
+# All changes require maintainer review
+*                           @videnovnebojsa
+
+# Workflow and security changes need extra scrutiny
+.github/                    @videnovnebojsa
+src/http.ts                 @videnovnebojsa
+src/config.ts               @videnovnebojsa
+src/index.ts                @videnovnebojsa

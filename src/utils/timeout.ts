@@ -1,3 +1,5 @@
+import { VaultError, VaultErrorCode } from "./errors.js";
+
 /**
  * Runs `fn` and rejects with a descriptive TimeoutError if it does not settle within `ms`.
  * Pass `ms = 0` to disable the timeout entirely.
@@ -32,9 +34,9 @@ export async function withTimeout<T>(fn: () => Promise<T>, ms: number): Promise<
   });
 }
 
-export class TimeoutError extends Error {
+export class TimeoutError extends VaultError {
   constructor(message: string) {
-    super(message);
+    super(message, VaultErrorCode.TIMEOUT);
     this.name = "TimeoutError";
   }
 }

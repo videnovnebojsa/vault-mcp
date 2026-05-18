@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, jest } from "bun:test";
 import { TimeoutError, withTimeout } from "./timeout.js";
 
 describe("withTimeout", () => {
@@ -8,21 +8,21 @@ describe("withTimeout", () => {
   });
 
   it("rejects with TimeoutError when fn exceeds the timeout", async () => {
-    vi.useFakeTimers();
+    jest.useFakeTimers();
     const slow = new Promise<never>(() => {});
     const promise = withTimeout(() => slow, 500);
-    vi.advanceTimersByTime(500);
+    jest.advanceTimersByTime(500);
     await expect(promise).rejects.toBeInstanceOf(TimeoutError);
-    vi.useRealTimers();
+    jest.useRealTimers();
   });
 
   it("TimeoutError message includes the timeout value", async () => {
-    vi.useFakeTimers();
+    jest.useFakeTimers();
     const slow = new Promise<never>(() => {});
     const promise = withTimeout(() => slow, 300);
-    vi.advanceTimersByTime(300);
+    jest.advanceTimersByTime(300);
     await expect(promise).rejects.toThrow("300ms");
-    vi.useRealTimers();
+    jest.useRealTimers();
   });
 
   it("propagates fn rejection without timeout interference", async () => {
@@ -36,24 +36,24 @@ describe("withTimeout", () => {
   });
 
   it("clears the timer on successful resolution (no pending callbacks)", async () => {
-    vi.useFakeTimers();
+    jest.useFakeTimers();
     const result = await withTimeout(() => Promise.resolve("done"), 5000);
     expect(result).toBe("done");
     // Advance past the timeout — no rejection should occur
-    vi.advanceTimersByTime(5000);
-    vi.useRealTimers();
+    jest.advanceTimersByTime(5000);
+    jest.useRealTimers();
   });
 
   it("clears the timer and rejects when fn throws synchronously", async () => {
-    vi.useFakeTimers();
+    jest.useFakeTimers();
     const boom = new Error("sync throw");
     const p = withTimeout(() => {
       throw boom;
     }, 500);
     // Advance past the timeout — must NOT produce a second unhandled rejection
-    vi.advanceTimersByTime(500);
+    jest.advanceTimersByTime(500);
     await expect(p).rejects.toBe(boom);
-    vi.useRealTimers();
+    jest.useRealTimers();
   });
 
   it("rejects with RangeError for negative ms", async () => {

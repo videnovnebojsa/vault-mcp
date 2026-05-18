@@ -1,10 +1,12 @@
 /**
  * Cross-reference gap detection — finds semantically similar notes that aren't linked.
  */
-import type { VaultRepository } from "../vault/repository.js";
+import { setImmediate as yieldImmediate } from "node:timers/promises";
+import { DEFAULT_SKIP_CONNECTION_PREFIXES } from "../config/folders.js";
+import { extractWikilinks } from "../vault/markdown.js";
 import type { EmbedProvider } from "./embed-provider.js";
 import type { EmbeddingStore } from "./embeddings.js";
-import type { VaultSearchStore } from "./store.js";
+import type { ISearchStore } from "./store.js";
 
 export interface ConnectionSuggestion {
   source: string;
@@ -12,18 +14,8 @@ export interface ConnectionSuggestion {
   similarity: number;
 }
 
-const SKIP_PREFIXES = ["70_AI_Logs/", "50_Templates/", "99_Archive/", "35_Artefacts/", "36_Canvases/"];
-
-function extractWikilinks(content: string): Set<string> {
-  const links = new Set<string>();
-  for (const match of content.matchAll(/\[\[([^\]|]+)(?:\|[^\]]+)?\]\]/g)) {
-    links.add((match[1] ?? "").trim());
-  }
-  return links;
-}
-
 function shouldSkip(path: string): boolean {
-  return SKIP_PREFIXES.some((prefix) => path.startsWith(prefix));
+  return DEFAULT_SKIP_CONNECTION_PREFIXES.some((prefix) => path.startsWith(prefix));
 }
 
 /**
@@ -36,21 +28,8 @@ function resolveWikilink(target: string, pathIndex: Map<string, string>): string
   return pathIndex.get(target);
 }
 
-function buildPathIndex(allPaths: Iterable<string>): Map<string, string> {
-  const pathIndex = new Map<string, string>();
-  for (const path of allPaths) {
-    const stem = path.replace(/\.md$/, "").split("/").pop() ?? "";
-    if (stem && !pathIndex.has(stem)) {
-      pathIndex.set(stem, path);
-    }
-    // Also index full path without .md
-    pathIndex.set(path, path);
-  }
-  return pathIndex;
-}
-
 function getLinkedPaths(content: string, pathIndex: Map<string, string>): Set<string> {
-  const links = extractWikilinks(content);
+  const links = new Set(extractWikilinks(content));
   const resolved = new Set<string>();
   for (const link of links) {
     const r = resolveWikilink(link, pathIndex);
@@ -63,16 +42,13 @@ export async function findConnections(opts: {
   notePath?: string;
   limit: number;
   minSimilarity: number;
-  searchStore: VaultSearchStore;
+  searchStore: ISearchStore;
   embeddingStore: EmbeddingStore;
   embedProvider: EmbedProvider;
-  vault: VaultRepository;
 }): Promise<ConnectionSuggestion[]> {
   const { notePath, limit, minSimilarity, searchStore, embeddingStore, embedProvider } = opts;
 
-  const allHashes = searchStore.getContentHashMap();
-  const allPaths = [...allHashes.keys()];
-  const pathIndex = buildPathIndex(allPaths);
+  const pathIndex = searchStore.getPathIndex();
 
   if (notePath) {
     return findConnectionsForNote(
@@ -93,7 +69,7 @@ async function findConnectionsForNote(
   notePath: string,
   limit: number,
   minSimilarity: number,
-  searchStore: VaultSearchStore,
+  searchStore: ISearchStore,
   embeddingStore: EmbeddingStore,
   embedProvider: EmbedProvider,
   pathIndex: Map<string, string>,
@@ -115,6 +91,7 @@ async function findConnectionsForNote(
   }
 
   const similar = embeddingStore.search(embedding, limit * 3);
+  const targetContents = searchStore.getContentBatchByPaths(similar.map((r) => r.path));
 
   const suggestions: ConnectionSuggestion[] = [];
   for (const result of similar) {
@@ -123,7 +100,7 @@ async function findConnectionsForNote(
     if (result.similarity < minSimilarity) continue;
 
     // Check reverse link
-    const targetContent = searchStore.getContentByPath(result.path);
+    const targetContent = targetContents.get(result.path);
     if (targetContent) {
       const targetLinked = getLinkedPaths(targetContent, pathIndex);
       if (targetLinked.has(notePath)) continue;
@@ -141,23 +118,24 @@ async function findConnectionsForNote(
   return suggestions;
 }
 
-function findConnectionsBatch(
+async function findConnectionsBatch(
   limitPerNote: number,
   minSimilarity: number,
-  searchStore: VaultSearchStore,
+  searchStore: ISearchStore,
   embeddingStore: EmbeddingStore,
   pathIndex: Map<string, string>,
-): ConnectionSuggestion[] {
+): Promise<ConnectionSuggestion[]> {
   const embeddedPaths = embeddingStore.getPaths().filter((p) => !shouldSkip(p));
 
   // Cap to avoid huge computation
-  const maxNotes = 200;
+  const maxNotes = 50;
   const pathsToCheck = embeddedPaths.slice(0, maxNotes);
 
   // Build link graph
   const linkGraph = new Map<string, Set<string>>();
+  const contents = searchStore.getContentBatchByPaths(pathsToCheck);
   for (const p of pathsToCheck) {
-    const content = searchStore.getContentByPath(p);
+    const content = contents.get(p);
     if (!content) continue;
     linkGraph.set(p, getLinkedPaths(content, pathIndex));
   }
@@ -166,11 +144,16 @@ function findConnectionsBatch(
   const seen = new Set<string>();
   const allSuggestions: ConnectionSuggestion[] = [];
 
-  for (const sourcePath of pathsToCheck) {
+  for (let sourceIndex = 0; sourceIndex < pathsToCheck.length; sourceIndex++) {
+    if (sourceIndex > 0 && sourceIndex % 25 === 0) {
+      await yieldImmediate();
+    }
+    const sourcePath = pathsToCheck[sourceIndex];
+    if (!sourcePath) continue;
     const sourceEmbedding = embeddingStore.getEmbedding(sourcePath);
     if (!sourceEmbedding) continue;
 
-    const sourceLinks = linkGraph.get(sourcePath) ?? new Set();
+    const sourceLinks: Set<string> = linkGraph.get(sourcePath) ?? new Set<string>();
 
     const similar = embeddingStore.search(sourceEmbedding, limitPerNote * 2);
 
@@ -181,7 +164,7 @@ function findConnectionsBatch(
       if (result.similarity < minSimilarity) continue;
 
       // Check reverse link
-      const targetLinks = linkGraph.get(result.path) ?? new Set();
+      const targetLinks: Set<string> = linkGraph.get(result.path) ?? new Set<string>();
       if (targetLinks.has(sourcePath)) continue;
 
       // Deduplicate: A↔B same as B↔A

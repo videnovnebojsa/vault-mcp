@@ -1,6 +1,6 @@
+import { Database } from "bun:sqlite";
+import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import Database from "better-sqlite3";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { EmbeddingStore } from "../search/embeddings.js";
 import { VaultSearchStore } from "../search/store.js";
 import { type ResourcesContext, registerResources } from "./server.js";
@@ -38,7 +38,7 @@ async function readResource(handlers: Map<string, ResourceHandler>, uri: string)
 // ── shared stores ─────────────────────────────────────────────────────────────
 
 let searchStore: VaultSearchStore;
-let embDb: Database.Database;
+let embDb: Database;
 let embeddingStore: EmbeddingStore;
 
 beforeEach(() => {
@@ -61,7 +61,7 @@ describe("vault://config resource", () => {
     const opts: ResourcesContext = {
       watcherEnabled: true,
       captureEnabled: false,
-      embeddingConfig: { enabled: false, hybridAlpha: 0.5, batchSize: 20, intervalMinutes: 30 },
+      embeddingConfig: { enabled: false, hybridAlpha: 0.5, batchSize: 20 },
       backupEnabled: true,
       mcpHost: "127.0.0.1",
       mcpPort: 3782,
@@ -122,7 +122,7 @@ describe("vault://config resource", () => {
     const { server, handlers } = makeResourceMock();
     registerResources(server, {
       vaultPath: "/v",
-      embeddingConfig: { enabled: true, hybridAlpha: 0.5, batchSize: 20, intervalMinutes: 30 },
+      embeddingConfig: { enabled: true, hybridAlpha: 0.5, batchSize: 20 },
     });
 
     const { data } = await readResource(handlers, "vault://config");
@@ -214,7 +214,7 @@ describe("vault://stats resource", () => {
       vaultPath: "/v",
       searchStore,
       embeddingStore,
-      embeddingConfig: { enabled: true, hybridAlpha: 0.5, batchSize: 20, intervalMinutes: 30 },
+      embeddingConfig: { enabled: true, hybridAlpha: 0.5, batchSize: 20 },
       aclConfig: { allowPaths: [], denyPaths: ["private"] },
     });
 
@@ -235,7 +235,7 @@ describe("vault://stats resource", () => {
       vaultPath: "/v",
       searchStore,
       embeddingStore,
-      embeddingConfig: { enabled: true, hybridAlpha: 0.5, batchSize: 20, intervalMinutes: 30 },
+      embeddingConfig: { enabled: true, hybridAlpha: 0.5, batchSize: 20 },
     });
 
     const { data } = await readResource(handlers, "vault://stats");
@@ -251,7 +251,7 @@ describe("vault://stats resource", () => {
     registerResources(server, {
       vaultPath: "/v",
       searchStore,
-      embeddingConfig: { enabled: false, hybridAlpha: 0.5, batchSize: 20, intervalMinutes: 30 },
+      embeddingConfig: { enabled: false, hybridAlpha: 0.5, batchSize: 20 },
     });
 
     const { data } = await readResource(handlers, "vault://stats");
@@ -266,7 +266,7 @@ describe("vault://stats resource", () => {
       vaultPath: "/v",
       searchStore,
       embeddingStore,
-      embeddingConfig: { enabled: true, hybridAlpha: 0.5, batchSize: 20, intervalMinutes: 30 },
+      embeddingConfig: { enabled: true, hybridAlpha: 0.5, batchSize: 20 },
     });
 
     const { data } = await readResource(handlers, "vault://stats");
@@ -284,7 +284,7 @@ describe("vault://stats resource", () => {
       vaultPath: "/v",
       searchStore,
       embeddingStore,
-      embeddingConfig: { enabled: true, hybridAlpha: 0.5, batchSize: 20, intervalMinutes: 30 },
+      embeddingConfig: { enabled: true, hybridAlpha: 0.5, batchSize: 20 },
     });
 
     const { data } = await readResource(handlers, "vault://stats");

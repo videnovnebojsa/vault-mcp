@@ -1,4 +1,17 @@
 /**
+ * Extract wikilinks ([[Note Title]] or [[path/to/note|alias]]) from markdown content.
+ * Returns a deduplicated array of link targets (without alias).
+ */
+export function extractWikilinks(content: string): string[] {
+  const links: string[] = [];
+  for (const m of content.matchAll(/\[\[([^\]|]+)(?:\|[^\]]+)?\]\]/g)) {
+    const target = ((m[1] ?? "").split("#")[0] ?? "").trim();
+    if (target) links.push(target);
+  }
+  return [...new Set(links)];
+}
+
+/**
  * Extract a named heading section from markdown content.
  * Returns the heading line and all lines beneath it until the next
  * same-or-higher heading, or null if the heading is not found.

@@ -1,0 +1,9 @@
+title = "vault-mcp gitleaks config"
+
+[allowlist]
+  description = "Known safe files"
+  paths = [
+    ".env.example",
+    "REVIEW.md",
+    "VERIFICATION.md",
+  ]

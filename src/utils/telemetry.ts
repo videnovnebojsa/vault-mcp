@@ -24,11 +24,21 @@ export function endSpan(span: Span, error?: unknown): void {
   const durationMs = Date.now() - span.startedAt;
   const isError = error !== undefined;
   metrics.record(span.toolName, durationMs, isError);
-  logger.info("tool", isError ? "error" : "ok", {
+  const extra = {
     requestId: span.id,
     tool: span.toolName,
     vault: span.vault,
     durationMs,
-    ...(isError ? { err: error instanceof Error ? error.message : String(error) } : {}),
-  });
+    ...(isError
+      ? {
+          err: error instanceof Error ? error.message : String(error),
+          ...(error instanceof Error && error.stack ? { stack: error.stack } : {}),
+        }
+      : {}),
+  };
+  if (isError) {
+    logger.warn("tool", "error", extra);
+  } else {
+    logger.info("tool", "ok", extra);
+  }
 }

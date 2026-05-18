@@ -1,7 +1,7 @@
+import { afterEach, beforeEach, describe, expect, it, mock } from "bun:test";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { VaultConfig } from "../config.js";
 import { VaultManager } from "./manager.js";
 
@@ -18,9 +18,8 @@ function makeConfig(overrides: Partial<VaultConfig> = {}): VaultConfig {
       model: "text-embedding-3-small",
       hybridAlpha: 0.5,
       batchSize: 20,
-      intervalMinutes: 30,
     },
-    backup: { enabled: false, dir: os.tmpdir(), maxBackups: 5, intervalHours: 24 },
+    backup: { enabled: false, dir: os.tmpdir(), maxBackups: 5 },
     capture: { enableCapturePipeline: false, logRawInput: false },
     watcher: { enabled: false, debounceMs: 300 },
     mcpPort: 3782,
@@ -73,13 +72,13 @@ describe("VaultManager.getServices", () => {
     expect(svc.vault).toBeDefined();
     expect(svc.searchStore).toBeDefined();
     expect(svc.vaultSync).toBeDefined();
-    expect(svc.vaultPath).toBe(os.tmpdir());
+    expect(svc.vault.vaultPath).toBe(os.tmpdir());
   });
 
   it("returns services for named vault", () => {
     const svc = manager.getServices("work");
     expect(svc).toBeDefined();
-    expect(svc.vaultPath).toBe(os.tmpdir());
+    expect(svc.vault.vaultPath).toBe(os.tmpdir());
   });
 
   it("returns different VaultRepository instances for different vaults", () => {
@@ -92,8 +91,8 @@ describe("VaultManager.getServices", () => {
     const workSvc = manager.getServices("work");
 
     expect(defaultSvc.vault).not.toBe(workSvc.vault);
-    expect(defaultSvc.vaultPath).toBe("/vault/a");
-    expect(workSvc.vaultPath).toBe("/vault/b");
+    expect(defaultSvc.vault.vaultPath).toBe("/vault/a");
+    expect(workSvc.vault.vaultPath).toBe("/vault/b");
   });
 
   it("returns the same cached instance on repeated calls", () => {
@@ -103,7 +102,7 @@ describe("VaultManager.getServices", () => {
   });
 
   it("throws for unknown vault names", () => {
-    expect(() => manager.getServices("unknown")).toThrowError(/Unknown vault: "unknown"/);
+    expect(() => manager.getServices("unknown")).toThrowError(/^Unknown vault$/);
   });
 
   it("capture is null when capture pipeline disabled", () => {
@@ -190,27 +189,99 @@ describe("VaultManager boot failure propagation", () => {
     expect(svc.bootFailed).toBe(false);
   });
 
-  it("bootFailed is true and bootReady rejects when runFullSync throws", async () => {
-    // Use vi.doMock to inject a VaultSync that always rejects, so bootVault sets bootFailed=true.
-    vi.resetModules();
-    vi.doMock("../search/sync.js", () => ({
-      VaultSync: vi.fn().mockImplementation(() => ({
-        runFullSync: vi.fn().mockRejectedValue(new Error("simulated sync failure")),
-        handleUpsert: vi.fn().mockResolvedValue(undefined),
-        handleDelete: vi.fn(),
-        handleRename: vi.fn().mockResolvedValue(undefined),
-      })),
-    }));
+  // The injected-failing-sync test lives in manager-boot-failure.test.ts
+  // (module isolation requires a separate file under bun:test).
+});
 
-    const { VaultManager: VM } = await import("./manager.js");
-    const m = new VM({ default: os.tmpdir() }, makeConfig());
-    manager = m as unknown as VaultManager;
-    const svc = m.getServices("default");
+describe("VaultManager.EmbedProviderFactory", () => {
+  it("accepts a custom embedProviderFactory and uses it when creating services", () => {
+    const mockProvider = { embed: mock() };
+    const factory = mock().mockReturnValue(mockProvider);
+    const config = makeConfig({
+      namedVaults: { default: os.tmpdir() },
+      embedding: {
+        enabled: true,
+        apiKey: "test-key",
+        endpoint: "",
+        model: "test-model",
+        hybridAlpha: 0.5,
+        batchSize: 20,
+      },
+    });
+    manager = new VaultManager(config.namedVaults, config, factory);
+    const svc = manager.getServices("default");
+    expect(factory).toHaveBeenCalledOnce();
+    expect(svc.embedProvider).toBe(mockProvider);
+  });
+});
 
-    await expect(svc.bootReady).rejects.toThrow("simulated sync failure");
-    expect(svc.bootFailed).toBe(true);
+describe("VaultManager.CaptureFactory", () => {
+  it("accepts a custom captureFactory and uses it when creating services", () => {
+    const mockCapture = { processCapture: mock() };
+    const factory = mock().mockReturnValue(mockCapture);
+    const config = makeConfig({
+      namedVaults: { default: os.tmpdir() },
+      capture: { enableCapturePipeline: true, logRawInput: false },
+    });
+    manager = new VaultManager(config.namedVaults, config, undefined, factory);
 
-    vi.resetModules();
+    const svc = manager.getServices("default");
+
+    expect(factory).toHaveBeenCalledOnce();
+    expect(svc.capture).toBe(mockCapture);
+  });
+});
+
+describe("VaultManager.trackSync", () => {
+  it("tracks in-flight syncs and removes them on completion", async () => {
+    manager = new VaultManager({ default: os.tmpdir() }, makeConfig());
+    let resolve!: () => void;
+    const p = new Promise<void>((r) => {
+      resolve = r;
+    });
+    manager.trackSync(p);
+    // p is still pending — shutdown should wait
+    resolve();
+    await p; // settle
+    // After settling, shutdown should complete cleanly
+    await expect(manager.shutdown()).resolves.toBeUndefined();
+  });
+
+  it("shutdown drains tracked syncs before closing stores", async () => {
+    manager = new VaultManager({ default: os.tmpdir() }, makeConfig());
+    manager.getServices("default");
+    await manager.getServices("default").bootReady;
+
+    const events: string[] = [];
+    let resolveSync!: () => void;
+    const syncPromise = new Promise<void>((r) => {
+      resolveSync = r;
+    });
+
+    manager.trackSync(
+      syncPromise.then(() => {
+        events.push("sync-complete");
+      }),
+    );
+
+    const shutdownPromise = manager.shutdown().then(() => {
+      events.push("shutdown-complete");
+    });
+
+    // Resolve the sync after a tick
+    resolveSync();
+    await shutdownPromise;
+
+    expect(events).toEqual(["sync-complete", "shutdown-complete"]);
+  });
+
+  it("in-flight sync error does not prevent shutdown", async () => {
+    manager = new VaultManager({ default: os.tmpdir() }, makeConfig());
+    const failingSync = Promise.reject(new Error("sync failed"));
+    // swallow unhandled rejection
+    failingSync.catch(() => {});
+    manager.trackSync(failingSync.catch(() => {}));
+    await expect(manager.shutdown()).resolves.toBeUndefined();
   });
 });
 

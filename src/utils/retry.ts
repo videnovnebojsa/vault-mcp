@@ -1,3 +1,5 @@
+import { logger } from "./logger.js";
+
 export class RetryableError extends Error {
   constructor(
     message: string,
@@ -48,9 +50,16 @@ export async function withRetry<T>(fn: () => Promise<T>, opts?: RetryOptions): P
       if (!isRetryable(err)) break;
 
       let delay = Math.min(baseDelayMs * 2 ** attempt, maxDelayMs);
-      // Respect Retry-After from server (unclamped — honor the server's request)
+      // Respect Retry-After from server — but cap to maxDelayMs
       if (err instanceof RetryableError && err.retryAfterMs) {
-        delay = Math.max(delay, err.retryAfterMs);
+        const serverDelay = err.retryAfterMs;
+        if (serverDelay > maxDelayMs) {
+          logger.warn("retry", "server Retry-After exceeds maxDelayMs — capping", {
+            serverDelayMs: serverDelay,
+            cappedMs: maxDelayMs,
+          });
+        }
+        delay = Math.max(delay, Math.min(serverDelay, maxDelayMs));
       }
       // Add jitter (0–25%)
       delay += Math.random() * delay * 0.25;

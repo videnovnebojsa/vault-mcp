@@ -1,4 +1,6 @@
-import type { VaultRepository } from "../vault/repository.js";
+import { VAULT_FOLDERS } from "../config/folders.js";
+import { logger } from "../utils/logger.js";
+import type { IVaultRepository } from "../vault/repository-interface.js";
 import { appendClassificationLog } from "./audit-log.js";
 import { classifyWithHeuristic } from "./classify-adapter.js";
 import { buildCapturePath } from "./filename.js";
@@ -17,7 +19,7 @@ function sanitizeClassification(c: CaptureClassification): CaptureClassification
 export class SecondBrainService {
   constructor(
     private readonly config: SecondBrainConfig,
-    private readonly vault: VaultRepository,
+    private readonly vault: IVaultRepository,
   ) {}
 
   async processCapture(text: string): Promise<CaptureResult> {
@@ -38,7 +40,7 @@ export class SecondBrainService {
     const useInbox =
       classification.confidence < 0.7 || classification.category === "unknown" || classification.sensitivity === "high";
 
-    const folder = useInbox ? "00_Inbox" : undefined;
+    const folder = useInbox ? VAULT_FOLDERS.INBOX : undefined;
     const notePath = buildCapturePath(classification.category, classification.suggested_title, folder);
 
     // Write note
@@ -64,8 +66,13 @@ export class SecondBrainService {
         result.path,
         this.config.logRawInput ? content : undefined,
       );
-    } catch {
-      // Non-fatal
+    } catch (err) {
+      // Non-fatal but operators MUST know the audit trail is incomplete
+      logger.warn("capture", "audit log write failed — audit trail incomplete", {
+        err: err instanceof Error ? err.message : String(err),
+        notePath: result.path,
+        category: classification.category,
+      });
     }
 
     return {

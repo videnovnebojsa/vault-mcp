@@ -1,15 +1,15 @@
+import { afterEach, beforeEach, describe, expect, it, mock } from "bun:test";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { VaultSync } from "./sync.js";
 import { createVaultWatcher, type VaultWatcher } from "./watcher.js";
 
 function createMockVaultSync() {
   return {
-    handleUpsert: vi.fn<(p: string) => Promise<void>>().mockResolvedValue(undefined),
-    handleDelete: vi.fn<(p: string) => boolean>().mockReturnValue(true),
-    handleRename: vi.fn<(o: string, n: string) => Promise<void>>().mockResolvedValue(undefined),
+    handleUpsert: mock<(p: string) => Promise<void>>().mockResolvedValue(undefined),
+    handleDelete: mock<(p: string) => boolean>().mockReturnValue(true),
+    handleRename: mock<(o: string, n: string) => Promise<void>>().mockResolvedValue(undefined),
   };
 }
 
@@ -22,6 +22,7 @@ describe("VaultWatcher", () => {
   let watcher: VaultWatcher;
 
   const DEBOUNCE = 100;
+  const RENAME_WINDOW = 250;
 
   beforeEach(async () => {
     tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "vaultwatcher-"));
@@ -38,6 +39,7 @@ describe("VaultWatcher", () => {
       vaultPath: tmpDir,
       vaultSync: mockSync as unknown as VaultSync,
       debounceMs: DEBOUNCE,
+      renameWindowMs: RENAME_WINDOW,
       chokidarOptions: { usePolling: true, interval: 50 },
     });
     watcher.start();
@@ -83,6 +85,23 @@ describe("VaultWatcher", () => {
 
     await fs.unlink(path.join(tmpDir, "todelete.md"));
     await waitFor(() => expect(mockSync.handleDelete).toHaveBeenCalledWith("todelete.md"));
+  });
+
+  it("honors a configured rename detection window", async () => {
+    await writeFile("fast-delete.md", "bye");
+    watcher = createVaultWatcher({
+      vaultPath: tmpDir,
+      vaultSync: mockSync as unknown as VaultSync,
+      debounceMs: 1,
+      renameWindowMs: 10,
+      chokidarOptions: { usePolling: true, interval: 10 },
+    });
+    watcher.start();
+    await watcher.ready;
+
+    await fs.unlink(path.join(tmpDir, "fast-delete.md"));
+
+    await waitFor(() => expect(mockSync.handleDelete).toHaveBeenCalledWith("fast-delete.md"), 500);
   });
 
   it("debounce coalesces rapid changes", async () => {
@@ -175,8 +194,7 @@ describe("VaultWatcher", () => {
     await startWatcher();
 
     await fs.unlink(path.join(tmpDir, "standalone.md"));
-    // Wait past the rename detection window (200ms) + debounce buffer
-    await wait(300 + DEBOUNCE + 200);
+    await wait(RENAME_WINDOW + DEBOUNCE + 200);
     expect(mockSync.handleDelete).toHaveBeenCalledWith("standalone.md");
     expect(mockSync.handleRename).not.toHaveBeenCalled();
   });
@@ -189,8 +207,7 @@ describe("VaultWatcher", () => {
     await startWatcher();
 
     await fs.unlink(path.join(tmpDir, "del-err.md"));
-    // Wait past rename window + a bit more
-    await wait(300 + DEBOUNCE + 200);
+    await wait(RENAME_WINDOW + DEBOUNCE + 200);
     expect(watcher.stats.errors).toBeGreaterThan(0);
     expect(mockSync.handleRename).not.toHaveBeenCalled();
   });
@@ -199,7 +216,6 @@ describe("VaultWatcher", () => {
     await writeFile("pending.md", "content");
     await startWatcher();
 
-    // Trigger an unlink so a pendingUnlinks timer is set (rename window = 200ms)
     await fs.unlink(path.join(tmpDir, "pending.md"));
     // Stop immediately — timers should be cleared, no delete/rename should fire
     await watcher.stop();
@@ -236,7 +252,6 @@ describe("VaultWatcher", () => {
     await wait(160);
     await writeFile("b.md", "# B");
 
-    // Wait for rename window (200ms) + debounce + polling buffer
     await waitFor(() => expect(mockSync.handleRename).toHaveBeenCalledWith("a.md", "b.md"), 3000);
     expect(mockSync.handleDelete).not.toHaveBeenCalled();
     expect(watcher.stats.eventsProcessed).toBeGreaterThanOrEqual(1);

@@ -1,7 +1,7 @@
+import { afterEach, beforeEach, describe, expect, it, spyOn } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { loadConfig } from "./config.js";
 
 const ORIG_ENV = process.env;
@@ -95,6 +95,14 @@ describe("integer env var parsing (safeInt)", () => {
     process.env["MCP_PORT"] = "not-a-number";
     const { mcpPort } = loadConfig();
     expect(mcpPort).toBe(3782);
+  });
+
+  it("does not call console.warn for non-integer value [ERR-01]", () => {
+    const spy = spyOn(console, "warn");
+    process.env["MCP_PORT"] = "bad-value";
+    loadConfig();
+    expect(spy).not.toHaveBeenCalled();
+    spy.mockRestore();
   });
 
   it("falls back to default for empty string", () => {
@@ -204,6 +212,56 @@ describe("HYBRID_ALPHA clamping", () => {
   it("accepts valid value in range", () => {
     process.env["HYBRID_ALPHA"] = "0.7";
     expect(loadConfig().embedding.hybridAlpha).toBeCloseTo(0.7);
+  });
+});
+
+// ── outbound URL scheme validation ───────────────────────────────────────────
+
+describe("outbound URL scheme validation", () => {
+  it("accepts http and https embedding and alert endpoints", () => {
+    process.env["EMBEDDING_ENDPOINT"] = "https://api.example.com/v1";
+    process.env["ALERT_WEBHOOK_URL"] = "http://alerts.example.com/hook";
+
+    const config = loadConfig();
+
+    expect(config.embedding.endpoint).toBe("https://api.example.com/v1");
+    expect(config.alertWebhookUrl).toBe("http://alerts.example.com/hook");
+  });
+
+  it("rejects non-http embedding endpoint schemes", () => {
+    process.env["EMBEDDING_ENDPOINT"] = "file:///etc/passwd";
+
+    expect(() => loadConfig()).toThrow(/EMBEDDING_ENDPOINT.*http/i);
+  });
+
+  it("rejects non-http alert webhook schemes", () => {
+    process.env["ALERT_WEBHOOK_URL"] = "gopher://127.0.0.1:11211";
+
+    expect(() => loadConfig()).toThrow(/ALERT_WEBHOOK_URL.*http/i);
+  });
+
+  it("defaults alertWebhookUrl to empty string when absent [QA-01]", () => {
+    delete process.env["ALERT_WEBHOOK_URL"];
+
+    expect(loadConfig().alertWebhookUrl).toBe("");
+  });
+
+  it("throws on malformed ALERT_WEBHOOK_URL with variable name in message [QA-02]", () => {
+    process.env["ALERT_WEBHOOK_URL"] = "not-a-url";
+
+    expect(() => loadConfig()).toThrow(/ALERT_WEBHOOK_URL/);
+  });
+
+  it("rejects non-http OTEL endpoint schemes [SEC-01]", () => {
+    process.env["OTEL_EXPORTER_OTLP_ENDPOINT"] = "file:///etc/passwd";
+
+    expect(() => loadConfig()).toThrow(/OTEL_EXPORTER_OTLP_ENDPOINT.*http/i);
+  });
+
+  it("defaults otelEndpoint to empty string when absent [SEC-01]", () => {
+    delete process.env["OTEL_EXPORTER_OTLP_ENDPOINT"];
+
+    expect(loadConfig().otelEndpoint).toBe("");
   });
 });
 

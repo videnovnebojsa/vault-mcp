@@ -1,7 +1,7 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { EmbeddingConfig } from "../config.js";
 import type { EmbeddingStore } from "../search/embeddings.js";
-import type { VaultSearchStore } from "../search/store.js";
+import type { ISearchStore } from "../search/store.js";
 import type { VaultManager } from "../vault/manager.js";
 import type { AclConfig } from "../vault/types.js";
 import { registerTools } from "./tools.js";
@@ -23,7 +23,7 @@ export interface ResourcesContext {
   aclConfig?: AclConfig;
   mcpHost?: string;
   mcpPort?: number;
-  searchStore?: VaultSearchStore;
+  searchStore?: ISearchStore;
   embeddingStore?: EmbeddingStore;
 }
 
@@ -45,7 +45,7 @@ export function createServer(opts: CreateServerOptions): McpServer {
     aclConfig: cfg.acl,
     mcpHost: opts.mcpHost ?? cfg.mcpHost,
     mcpPort: opts.mcpPort ?? cfg.mcpPort,
-    searchStore: defaultSvc.searchStore,
+    ...(defaultSvc.searchStore !== undefined ? { searchStore: defaultSvc.searchStore } : {}),
     ...(defaultSvc.embeddingStore !== undefined ? { embeddingStore: defaultSvc.embeddingStore } : {}),
   });
 

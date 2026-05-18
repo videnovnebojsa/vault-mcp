@@ -1,7 +1,8 @@
+import { afterEach, beforeEach, describe, expect, it, mock, spyOn } from "bun:test";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { logger } from "../utils/logger.js";
 import { VaultSearchStore } from "./store.js";
 import { collectMarkdownFiles, md5, toCanonicalPath, VaultSync } from "./sync.js";
 
@@ -32,6 +33,18 @@ describe("VaultSync", () => {
     expect(result.scanned).toBe(0);
     expect(result.upserted).toBe(0);
     expect(result.deletedStale).toBe(0);
+  });
+
+  it("accepts a minimal sync store implementation", () => {
+    const minimalStore = {
+      upsert: mock().mockReturnValue({ changed: false }),
+      listCanonicalPaths: mock().mockReturnValue([]),
+      deleteByPath: mock().mockReturnValue(false),
+    };
+
+    const syncWithMinimalStore = new VaultSync({ vaultPath: tmpDir, store: minimalStore });
+
+    expect(syncWithMinimalStore.isSyncing()).toBe(false);
   });
 
   it("syncs vault with markdown files", async () => {
@@ -111,6 +124,16 @@ describe("VaultSync", () => {
     expect(entry?.metadata).toEqual({ type: "note" });
   });
 
+  it("stores parsed note body without YAML frontmatter", async () => {
+    await writeFile("parsed.md", "---\ntype: note\ntags:\n  - search\n---\n# Searchable body");
+
+    await sync.handleUpsert("parsed.md");
+
+    const entry = store.getByPath("parsed.md");
+    expect(entry?.content).toBe("# Searchable body");
+    expect(entry?.metadata).toEqual({ type: "note", tags: ["search"] });
+  });
+
   it("handleDelete removes from index", async () => {
     await writeFile("del.md", "To delete");
     await sync.handleUpsert("del.md");
@@ -169,6 +192,34 @@ describe("helpers", () => {
       const names = files.map((f) => path.basename(f.path));
       expect(names.sort()).toEqual(["a.md", "b.md"]);
     } finally {
+      await fs.rm(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it("collectMarkdownFiles logs stat failures instead of silently skipping markdown files [ERR-06]", async () => {
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "collect-stat-fail-"));
+    const goodPath = path.join(tmpDir, "good.md");
+    const badPath = path.join(tmpDir, "bad.md");
+    const realStat = fs.stat;
+    const warnSpy = spyOn(logger, "warn").mockImplementation(() => {});
+    spyOn(fs, "stat").mockImplementation((target: Parameters<typeof fs.stat>[0]) => {
+      if (target === badPath) return Promise.reject(new Error("stat denied"));
+      return realStat(target);
+    });
+
+    try {
+      await fs.writeFile(goodPath, "good");
+      await fs.writeFile(badPath, "bad");
+
+      const files = await collectMarkdownFiles(tmpDir);
+
+      expect(files.map((file) => path.basename(file.path))).toEqual(["good.md"]);
+      expect(warnSpy).toHaveBeenCalledWith("sync", "skipping unstatable markdown file", {
+        path: badPath,
+        err: "stat denied",
+      });
+    } finally {
+      mock.restore();
       await fs.rm(tmpDir, { recursive: true, force: true });
     }
   });

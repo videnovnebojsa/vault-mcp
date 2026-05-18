@@ -1,7 +1,7 @@
+import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { appendClassificationLog } from "./audit-log.js";
 import type { CaptureClassification } from "./types.js";
 
@@ -69,5 +69,18 @@ describe("appendClassificationLog", () => {
     const files = await fs.readdir(path.join(tmpDir, "70_AI_Logs", "classifications"));
     const content = await fs.readFile(path.join(tmpDir, "70_AI_Logs", "classifications", files[0]), "utf-8");
     expect(content).toContain("...");
+  });
+
+  it("rejects audit log paths that escape through a symlink", async () => {
+    const outsideDir = await fs.mkdtemp(path.join(os.tmpdir(), "audit-log-outside-"));
+    await fs.symlink(outsideDir, path.join(tmpDir, "70_AI_Logs"));
+
+    try {
+      await expect(appendClassificationLog(tmpDir, mockClassification, "path.md")).rejects.toThrow(
+        "Path resolves outside vault root",
+      );
+    } finally {
+      await fs.rm(outsideDir, { recursive: true, force: true });
+    }
   });
 });

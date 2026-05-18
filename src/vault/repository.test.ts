@@ -1,7 +1,7 @@
+import { afterEach, beforeEach, describe, expect, it, mock, spyOn } from "bun:test";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { AclViolationError, PathTraversalError } from "./path-safety.js";
 import { VaultRepository } from "./repository.js";
 
@@ -196,6 +196,41 @@ describe("VaultRepository", () => {
       const results = await repo.listFolder("folder", { recursive: false });
       expect(results.length).toBe(2); // note1 and note2, not sub/note3
     });
+
+    it("applies modifiedAfter before offset in deterministic path order", async () => {
+      await fs.mkdir(path.join(tmpDir, "paged", "a"), { recursive: true });
+      await fs.writeFile(path.join(tmpDir, "paged", "a.md"), "Root A");
+      await fs.writeFile(path.join(tmpDir, "paged", "a", "deep.md"), "Deep A");
+      await fs.writeFile(path.join(tmpDir, "paged", "b.md"), "Root B");
+      await fs.writeFile(path.join(tmpDir, "paged", "old.md"), "Old");
+
+      const oldTime = new Date("2020-01-01T00:00:00.000Z");
+      const freshTime = new Date("2020-01-02T00:00:00.000Z");
+      await fs.utimes(path.join(tmpDir, "paged", "a.md"), freshTime, freshTime);
+      await fs.utimes(path.join(tmpDir, "paged", "a", "deep.md"), freshTime, freshTime);
+      await fs.utimes(path.join(tmpDir, "paged", "b.md"), freshTime, freshTime);
+      await fs.utimes(path.join(tmpDir, "paged", "old.md"), oldTime, oldTime);
+
+      const page = await repo.listFolderPage("paged", {
+        limit: 1,
+        offset: 1,
+        modifiedAfter: new Date("2020-01-01T12:00:00.000Z").getTime(),
+      });
+
+      expect(page.total).toBe(3);
+      expect(page.items.map((item) => item.path)).toEqual(["paged/a/deep.md"]);
+    });
+
+    it("propagates ACL violations encountered during recursive listing", async () => {
+      await repo.writeNote("visible/note", { content: "Visible" });
+      await repo.writeNote("visible/private/secret", { content: "Secret" });
+      const aclRepo = new VaultRepository({
+        vaultPath: tmpDir,
+        acl: { allowPaths: [], denyPaths: ["visible/private"] },
+      });
+
+      await expect(aclRepo.listFolder("visible")).rejects.toThrow(AclViolationError);
+    });
   });
 
   describe("searchByPathOrName", () => {
@@ -233,6 +268,16 @@ describe("VaultRepository", () => {
       });
       expect(results.length).toBe(1);
       expect(results[0].path).toContain("80_People");
+    });
+
+    it("propagates ACL violations encountered during path traversal", async () => {
+      await repo.writeNote("docs/public", { content: "Public" });
+      await repo.writeNote("docs/private/secret", { content: "Secret" });
+      const aclRepo = new VaultRepository({
+        vaultPath: tmpDir,
+        acl: { allowPaths: [], denyPaths: ["docs/private"] },
+      });
+      await expect(aclRepo.searchByPathOrName("")).rejects.toThrow(AclViolationError);
     });
   });
 
@@ -304,6 +349,59 @@ describe("VaultRepository", () => {
     });
   });
 
+  describe("updateWikilinks", () => {
+    it("rewrites basename and full-path wikilinks while preserving aliases", async () => {
+      await repo.writeNote("Refs/a", {
+        content: "See [[Old Note]] and [[Projects/Old Note|the project]].",
+      });
+      await repo.writeNote("Refs/b", {
+        content: "No matching links here.",
+      });
+
+      const result = await repo.updateWikilinks("Projects/Old Note", "Archive/New Note");
+
+      expect(result).toEqual({ updated: 1, errors: [] });
+      const updated = await repo.readNote("Refs/a");
+      const untouched = await repo.readNote("Refs/b");
+      expect(updated.content).toContain("[[New Note]]");
+      expect(updated.content).toContain("[[Archive/New Note|the project]]");
+      expect(untouched.content).toBe("No matching links here.");
+    });
+
+    it("uses searchStore candidates when available", async () => {
+      await repo.writeNote("Refs/a", { content: "See [[Old Note]]." });
+      await repo.writeNote("Refs/b", { content: "See [[Old Note]]." });
+      const searchStore = {
+        searchFTS: mock().mockReturnValue([{ path: "Refs/a.md" }]),
+      };
+
+      const result = await repo.updateWikilinks("Old Note", "New Note", searchStore);
+
+      expect(searchStore.searchFTS).toHaveBeenCalledWith("Old Note", 1000);
+      expect(result).toEqual({ updated: 1, errors: [] });
+      expect((await repo.readNote("Refs/a")).content).toContain("[[New Note]]");
+      expect((await repo.readNote("Refs/b")).content).toContain("[[Old Note]]");
+    });
+
+    it("reports ACL-denied files during wikilink updates", async () => {
+      await repo.writeNote("Allowed/a", { content: "See [[Old Note]]." });
+      await repo.writeNote("Private/b", { content: "See [[Old Note]]." });
+      const aclRepo = new VaultRepository({
+        vaultPath: tmpDir,
+        acl: { allowPaths: ["Allowed"], denyPaths: [] },
+      });
+
+      const result = await aclRepo.updateWikilinks("Old Note", "New Note");
+
+      expect(result.updated).toBe(1);
+      expect(result.errors).toHaveLength(1);
+      expect(result.errors[0]).toContain("Private/b.md");
+      expect(result.errors[0]).toContain("Access denied");
+      expect((await repo.readNote("Allowed/a")).content).toContain("[[New Note]]");
+      expect((await repo.readNote("Private/b")).content).toContain("[[Old Note]]");
+    });
+  });
+
   describe("deleteNote", () => {
     it("deletes an existing note", async () => {
       await repo.writeNote("doomed-note", { content: "Goodbye" });
@@ -315,7 +413,18 @@ describe("VaultRepository", () => {
     it("returns error when note does not exist", async () => {
       const result = await repo.deleteNote("ghost-note");
       expect(result.ok).toBe(false);
-      expect(result.message).toContain("cannot be deleted");
+      expect(result.message).toContain("Note not found");
+    });
+
+    it("returns a distinct permission error when unlink is denied", async () => {
+      const err = Object.assign(new Error("denied"), { code: "EACCES" });
+      const unlinkSpy = spyOn(fs, "unlink").mockRejectedValueOnce(err);
+
+      const result = await repo.deleteNote("denied-note");
+
+      expect(result.ok).toBe(false);
+      expect(result.message).toContain("Permission denied");
+      unlinkSpy.mockRestore();
     });
 
     it("blocks path traversal", async () => {
@@ -340,6 +449,7 @@ describe("VaultRepository", () => {
       const result = await repo.softDeleteNote("ghost");
       expect(result.ok).toBe(false);
       expect(result.trashName).toBe("");
+      expect(result.message).toContain("Note not found");
     });
 
     it("throws AclViolationError for ACL-denied path", async () => {

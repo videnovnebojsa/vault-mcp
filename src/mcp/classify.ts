@@ -1,3 +1,4 @@
+import { VAULT_FOLDERS } from "../config/folders.js";
 import type { ClassifyRules } from "../config.js";
 
 export type { ClassifyRules };
@@ -13,19 +14,19 @@ export interface ClassifyResult {
 export const DEFAULT_CLASSIFY_RULES: ClassifyRules = {
   person: {
     keywords: ["met", "spoke with", "talked to", "person", "contact", "meeting with", "conversation with"],
-    folder: "80_People",
+    folder: VAULT_FOLDERS.PEOPLE,
   },
   project: {
     keywords: ["project", "milestone", "sprint", "deadline", "deliverable", "roadmap", "project plan"],
-    folder: "10_Projects",
+    folder: VAULT_FOLDERS.PROJECTS,
   },
   idea: {
     keywords: ["idea", "concept", "what if", "insight", "hypothesis", "thought", "brainstorm"],
-    folder: "30_Zettelkasten",
+    folder: VAULT_FOLDERS.ZETTELKASTEN,
   },
   admin: {
     keywords: ["invoice", "tax", "admin", "budget", "expense", "receipt", "payment", "contract"],
-    folder: "90_Admin",
+    folder: VAULT_FOLDERS.ADMIN,
   },
 };
 
@@ -58,7 +59,7 @@ export function classify(text: string, rules: ClassifyRules = DEFAULT_CLASSIFY_R
     category: "unknown",
     confidence: 0.3,
     suggested_title: extractTitle(text),
-    suggested_folder: "00_Inbox",
+    suggested_folder: VAULT_FOLDERS.INBOX,
     tags: [],
   };
 }

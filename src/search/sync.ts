@@ -1,19 +1,31 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
-import matter from "gray-matter";
 import { logger } from "../utils/logger.js";
-import type { VaultSearchStore } from "./store.js";
+import { parseFrontmatter } from "../vault/frontmatter.js";
 import type { VaultSyncResult } from "./types.js";
+
+export interface VaultSyncStore {
+  upsert(
+    canonicalPath: string,
+    content: string,
+    contentHash: string,
+    fileName: string,
+    metadata: Record<string, unknown>,
+    fileTimes?: { createdAt?: number; updatedAt?: number },
+  ): { changed: boolean };
+  listCanonicalPaths(): string[];
+  deleteByPath(canonicalPath: string): boolean;
+}
 
 export interface VaultSyncOptions {
   vaultPath: string;
-  store: VaultSearchStore;
+  store: VaultSyncStore;
 }
 
 export class VaultSync {
   private vaultPath: string;
-  private store: VaultSearchStore;
+  private store: VaultSyncStore;
   private mtimeCache = new Map<string, number>();
   // Coalescing gate: all concurrent callers share the same in-flight promise so they
   // all receive real results instead of a silent no-op early return.
@@ -22,6 +34,11 @@ export class VaultSync {
   constructor(opts: VaultSyncOptions) {
     this.vaultPath = opts.vaultPath;
     this.store = opts.store;
+  }
+
+  /** Returns true if a full sync is currently in progress. */
+  isSyncing(): boolean {
+    return this.activeSyncPromise !== null;
   }
 
   runFullSync(): Promise<VaultSyncResult> {
@@ -43,33 +60,24 @@ export class VaultSync {
     let skippedUnchanged = 0;
     let skippedErrors = 0;
 
-    for (const file of files) {
+    const processFile = async (file: FileInfo): Promise<void> => {
       const canonical = toCanonicalPath(path.relative(this.vaultPath, file.path));
       scannedPaths.add(canonical);
 
       const cachedMtime = this.mtimeCache.get(canonical);
       if (cachedMtime !== undefined && cachedMtime === file.mtimeMs) {
         skippedUnchanged++;
-        continue;
+        return;
       }
 
       try {
         const content = await fs.readFile(file.path, "utf-8");
         const hash = md5(content);
 
-        let metadata: Record<string, unknown> = {};
-        try {
-          const parsed = matter(content);
-          metadata = (parsed.data ?? {}) as Record<string, unknown>;
-        } catch (err) {
-          logger.warn("sync", "frontmatter parse error", {
-            path: canonical,
-            err: err instanceof Error ? err.message : String(err),
-          });
-        }
+        const parsedNote = parseNoteForSync(content, canonical, "frontmatter parse error");
 
         const fileName = path.basename(file.path, ".md");
-        const { changed } = this.store.upsert(canonical, content, hash, fileName, metadata, {
+        const { changed } = this.store.upsert(canonical, parsedNote.content, hash, fileName, parsedNote.metadata, {
           createdAt: file.birthtimeMs,
           updatedAt: file.mtimeMs,
         });
@@ -88,6 +96,11 @@ export class VaultSync {
           err: err instanceof Error ? err.message : String(err),
         });
       }
+    };
+
+    const SYNC_CONCURRENCY = 32;
+    for (let i = 0; i < files.length; i += SYNC_CONCURRENCY) {
+      await Promise.all(files.slice(i, i + SYNC_CONCURRENCY).map(processFile));
     }
 
     // Delete stale entries
@@ -122,26 +135,29 @@ export class VaultSync {
 
   async handleUpsert(canonicalPath: string): Promise<void> {
     const absPath = path.join(this.vaultPath, canonicalPath);
-    const [content, stat] = await Promise.all([fs.readFile(absPath, "utf-8"), fs.stat(absPath)]);
-    const hash = md5(content);
+    let content: string;
+    let stat: import("node:fs").Stats;
 
-    let metadata: Record<string, unknown> = {};
     try {
-      const parsed = matter(content);
-      metadata = (parsed.data ?? {}) as Record<string, unknown>;
+      [content, stat] = await Promise.all([fs.readFile(absPath, "utf-8"), fs.stat(absPath)]);
     } catch (err) {
-      logger.warn("sync", "frontmatter parse error", {
+      logger.warn("sync", "handleUpsert: file not readable", {
         path: canonicalPath,
         err: err instanceof Error ? err.message : String(err),
       });
+      throw err; // re-throw so callers (watcher, tools) know it failed
     }
 
+    const hash = md5(content);
+
+    const parsedNote = parseNoteForSync(content, canonicalPath, "frontmatter parse error in handleUpsert");
+
     const fileName = path.basename(absPath, ".md");
-    this.store.upsert(canonicalPath, content, hash, fileName, metadata, {
+    this.store.upsert(canonicalPath, parsedNote.content, hash, fileName, parsedNote.metadata, {
       createdAt: stat.birthtimeMs,
       updatedAt: stat.mtimeMs,
     });
-    this.mtimeCache.set(canonicalPath, stat.mtimeMs);
+    this.mtimeCache.set(canonicalPath, stat.mtimeMs); // only set on success
   }
 
   handleDelete(canonicalPath: string): boolean {
@@ -157,6 +173,23 @@ export class VaultSync {
 
 export function md5(content: string): string {
   return createHash("md5").update(content).digest("hex");
+}
+
+function parseNoteForSync(
+  content: string,
+  canonicalPath: string,
+  errorMessage: string,
+): { content: string; metadata: Record<string, unknown> } {
+  try {
+    const parsed = parseFrontmatter(content);
+    return { content: parsed.content, metadata: parsed.frontmatter as Record<string, unknown> };
+  } catch (err) {
+    logger.warn("sync", errorMessage, {
+      path: canonicalPath,
+      err: err instanceof Error ? err.message : String(err),
+    });
+    return { content, metadata: {} };
+  }
 }
 
 export function toCanonicalPath(p: string): string {
@@ -176,23 +209,28 @@ export async function collectMarkdownFiles(dir: string): Promise<FileInfo[]> {
     const entries = await fs.readdir(currentDir, { withFileTypes: true }).catch(() => null);
     if (!entries) return;
 
-    for (const entry of entries) {
-      // Skip dot-prefixed dirs/files
-      if (entry.name.startsWith(".")) continue;
+    await Promise.all(
+      entries.map(async (entry) => {
+        // Skip dot-prefixed dirs/files
+        if (entry.name.startsWith(".")) return;
 
-      const fullPath = path.join(currentDir, entry.name);
+        const fullPath = path.join(currentDir, entry.name);
 
-      if (entry.isDirectory()) {
-        await walk(fullPath);
-      } else if (entry.isFile() && entry.name.endsWith(".md")) {
-        try {
-          const stat = await fs.stat(fullPath);
-          results.push({ path: fullPath, mtimeMs: stat.mtimeMs, birthtimeMs: stat.birthtimeMs });
-        } catch {
-          // Skip files we can't stat
+        if (entry.isDirectory()) {
+          await walk(fullPath);
+        } else if (entry.isFile() && entry.name.endsWith(".md")) {
+          try {
+            const stat = await fs.stat(fullPath);
+            results.push({ path: fullPath, mtimeMs: stat.mtimeMs, birthtimeMs: stat.birthtimeMs });
+          } catch (err) {
+            logger.warn("sync", "skipping unstatable markdown file", {
+              path: fullPath,
+              err: err instanceof Error ? err.message : String(err),
+            });
+          }
         }
-      }
-    }
+      }),
+    );
   }
 
   await walk(dir);
