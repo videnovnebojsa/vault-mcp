@@ -18,8 +18,8 @@ export async function handleVaultFindConnections(
   }
   const suggestions = await findConnections({
     ...(args.path !== undefined ? { notePath: args.path } : {}),
-    limit: args.limit,
-    minSimilarity: args.min_similarity,
+    limit: args.limit ?? 5,
+    minSimilarity: args.min_similarity ?? 0.75,
     searchStore,
     embeddingStore,
     embedProvider,
