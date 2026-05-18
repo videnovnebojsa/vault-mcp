@@ -52,7 +52,6 @@ interface LoadedOtelModules {
 }
 
 async function loadOtelModules(): Promise<LoadedOtelModules> {
-  // @ts-expect-error — optional runtime deps, not installed by default
   const [sdkNode, autoInstrumentations, otlpExporter, traceNode, api] = await Promise.all([
     // @ts-expect-error
     import("@opentelemetry/sdk-node"),
