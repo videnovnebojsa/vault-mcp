@@ -3,7 +3,7 @@ pre-commit:
   commands:
     biome:
       run: bunx biome check --write {staged_files} && git add {staged_files}
-      glob: "*.{ts,js,json,toml}"
+      glob: "*.{ts,js,json}"
     gitleaks:
       run: gitleaks protect --staged --redact --config .gitleaks.toml
 
