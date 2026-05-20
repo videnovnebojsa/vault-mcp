@@ -26,7 +26,9 @@ export async function appendClassificationLog(
     `- **Title**: ${classification.suggested_title}`,
     `- **Tags**: ${classification.tags.join(", ") || "none"}`,
     `- **Filed to**: [[${notePath}]]`,
-    ...(rawInput ? [`- **Raw input**: ${rawInput.slice(0, 200)}${rawInput.length > 200 ? "..." : ""}`] : []),
+    ...(rawInput
+      ? [`- **Raw input**: ${rawInput.replace(/[\r\n]+/g, " ").slice(0, 200)}${rawInput.length > 200 ? "..." : ""}`]
+      : []),
     "",
   ].join("\n");
 

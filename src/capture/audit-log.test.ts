@@ -71,6 +71,25 @@ describe("appendClassificationLog", () => {
     expect(content).toContain("...");
   });
 
+  // SEC-01: rawInput must not contain unescaped newlines that could inject markdown structure
+  it("[SEC-01] rawInput newlines are stripped before embedding in the log", async () => {
+    const malicious = "normal text\n---\ntype: injected\n---\n# Injected heading";
+    await appendClassificationLog(tmpDir, mockClassification, "path.md", malicious);
+
+    const files = await fs.readdir(path.join(tmpDir, "70_AI_Logs", "classifications"));
+    const content = await fs.readFile(path.join(tmpDir, "70_AI_Logs", "classifications", files[0]), "utf-8");
+    const lines = content.split("\n");
+    // A standalone "---" line would be a markdown frontmatter injection vector
+    expect(lines).not.toContain("---");
+    // The Raw input value must be on a single line (no embedded newlines)
+    const rawInputIdx = lines.findIndex((l) => l.includes("**Raw input**"));
+    expect(rawInputIdx).toBeGreaterThan(-1);
+    const rawInputLine = lines[rawInputIdx];
+    // The entire rawInput value should be on this one line (collapsed newlines)
+    expect(rawInputLine).toContain("normal text");
+    expect(rawInputLine).toContain("---");
+  });
+
   it("rejects audit log paths that escape through a symlink", async () => {
     const outsideDir = await fs.mkdtemp(path.join(os.tmpdir(), "audit-log-outside-"));
     await fs.symlink(outsideDir, path.join(tmpDir, "70_AI_Logs"));
