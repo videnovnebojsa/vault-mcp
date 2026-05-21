@@ -97,7 +97,7 @@ describe("VaultSearchStore", () => {
     expect(contents.get("notes/b.md")).toBe("Beta");
   });
 
-  it("builds and invalidates a cached path index", () => {
+  it("builds a cached path index and extends it in-place on new inserts", () => {
     store.upsert("notes/Alpha.md", "Alpha", "h1", "Alpha", {});
 
     const first = store.getPathIndex();
@@ -106,8 +106,22 @@ describe("VaultSearchStore", () => {
 
     store.upsert("notes/Beta.md", "Beta", "h2", "Beta", {});
     const second = store.getPathIndex();
-    expect(second).not.toBe(first);
+    expect(second).toBe(first);
     expect(second.get("Beta")).toBe("notes/Beta.md");
+  });
+
+  it("updates pathIndexCache in-place on new-path insert instead of clearing it [PERF-05]", () => {
+    store.upsert("notes/Alpha.md", "Alpha", "h1", "Alpha", {});
+    const cache = store.getPathIndex(); // populate cache
+
+    store.upsert("notes/Beta.md", "Beta", "h2", "Beta", {}); // brand-new path
+
+    // Same Map reference — not rebuilt
+    expect(store.getPathIndex()).toBe(cache);
+    // New path entries are present in the same cache object
+    expect(cache.get("Beta")).toBe("notes/Beta.md");
+    expect(cache.get("notes/Beta")).toBe("notes/Beta.md");
+    expect(cache.get("notes/Beta.md")).toBe("notes/Beta.md");
   });
 
   it("keeps the cached path index when only existing path content changes", () => {

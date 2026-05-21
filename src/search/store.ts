@@ -284,7 +284,12 @@ export class VaultSearchStore implements ISearchStore {
       throw err;
     }
 
-    if (!existing) this.pathIndexCache = undefined;
+    if (!existing && this.pathIndexCache) {
+      const stem = canonicalPath.replace(/\.md$/, "").split("/").pop() ?? "";
+      if (stem && !this.pathIndexCache.has(stem)) this.pathIndexCache.set(stem, canonicalPath);
+      this.pathIndexCache.set(canonicalPath.replace(/\.md$/, ""), canonicalPath);
+      this.pathIndexCache.set(canonicalPath, canonicalPath);
+    }
     return { changed: true };
   }
 
