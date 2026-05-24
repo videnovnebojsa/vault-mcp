@@ -72,7 +72,7 @@ bun run build:bun
 # binary written to dist-bin/vault-mcp
 ```
 
-Copy the binary to a stable path, create `~/.config/vault-mcp/.env` from `.env.example`, then set up the service manually (see below).
+Copy the binary to a stable path, create `~/.config/vault-mcp/.env` from [.env.example](../.env.example), then set up the service manually (see below).
 
 ---
 
@@ -115,9 +115,9 @@ File: `~/Library/LaunchAgents/com.vault-mcp.plist`
   <key>KeepAlive</key>
   <true/>
   <key>StandardOutPath</key>
-  <string>/tmp/vault-mcp.log</string>
+  <string>/Users/you/Library/Logs/vault-mcp/vault-mcp.log</string>
   <key>StandardErrorPath</key>
-  <string>/tmp/vault-mcp.err</string>
+  <string>/Users/you/Library/Logs/vault-mcp/vault-mcp.err</string>
 </dict>
 </plist>
 ```
@@ -130,7 +130,7 @@ launchctl load ~/Library/LaunchAgents/com.vault-mcp.plist
 launchctl kickstart -k gui/$UID/com.vault-mcp
 ```
 
-Logs: `tail -f /tmp/vault-mcp.err`
+Logs: `tail -f ~/Library/Logs/vault-mcp/vault-mcp.err`
 
 ### Linux — systemd (user)
 

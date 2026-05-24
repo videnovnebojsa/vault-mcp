@@ -86,7 +86,7 @@ curl http://localhost:3782/health
 
 ## Configuration
 
-All settings live in `~/.config/vault-mcp/.env`. The setup script writes this file with your answers and leaves every optional variable commented out with its default — edit and uncomment to tune anything.
+All settings live in `~/.config/vault-mcp/.env`, including manual installs. The setup script writes this file with your answers and leaves every optional variable commented out with its default; if you install manually, start from [.env.example](.env.example) and write the final file to `~/.config/vault-mcp/.env`.
 
 To apply changes after editing:
 
