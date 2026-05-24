@@ -79,8 +79,6 @@ describe("appendClassificationLog", () => {
     const files = await fs.readdir(path.join(tmpDir, "70_AI_Logs", "classifications"));
     const content = await fs.readFile(path.join(tmpDir, "70_AI_Logs", "classifications", files[0]), "utf-8");
     const lines = content.split("\n");
-    // A standalone "---" line would be a markdown frontmatter injection vector
-    expect(lines).not.toContain("---");
     // The Raw input value must be on a single line (no embedded newlines)
     const rawInputIdx = lines.findIndex((l) => l.includes("**Raw input**"));
     expect(rawInputIdx).toBeGreaterThan(-1);
@@ -88,6 +86,12 @@ describe("appendClassificationLog", () => {
     // The entire rawInput value should be on this one line (collapsed newlines)
     expect(rawInputLine).toContain("normal text");
     expect(rawInputLine).toContain("---");
+    // No injected "---" should appear in the body (after the closing frontmatter delimiter).
+    // The file has exactly 2 legitimate "---" lines (YAML frontmatter open + close);
+    // any additional standalone "---" line beyond those two would be an injection.
+    const closingFrontmatterIdx = lines.indexOf("---", 1); // skip the opening "---" at index 0
+    const bodyLines = lines.slice(closingFrontmatterIdx + 1);
+    expect(bodyLines).not.toContain("---");
   });
 
   it("rejects audit log paths that escape through a symlink", async () => {
