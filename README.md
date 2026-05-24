@@ -114,9 +114,17 @@ bun run lint                      # biome check
 |---|---|
 | Installation options (manual, service) | [docs/installation.md](docs/installation.md) |
 | Connecting MCP clients | [docs/clients.md](docs/clients.md) |
-| Full configuration reference | [docs/CONFIGURATION.md](docs/CONFIGURATION.md) |
+| Full configuration reference | [docs/configuration.md](docs/configuration.md) |
 | Full tool reference | [docs/tools.md](docs/tools.md) |
-| Architecture | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) |
+| Feature roadmap & status | [docs/roadmap.md](docs/roadmap.md) |
+
+### Contributing
+
+| Topic | Link |
+|---|---|
+| Internal module map & data flow | [docs/contributing/architecture.md](docs/contributing/architecture.md) |
+| Architectural rules & patterns | [docs/contributing/design-standards.md](docs/contributing/design-standards.md) |
+| Tooling, lint, test, CI standards | [docs/contributing/typescript-standards.md](docs/contributing/typescript-standards.md) |
 
 ## License
 

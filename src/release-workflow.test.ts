@@ -31,7 +31,7 @@ describe("release workflow", () => {
 
 describe("review documentation regressions", () => {
   it("documents why the Bun SQLite shim keeps PRAGMA execution constrained [ARCH-04]", () => {
-    const architecture = fs.readFileSync(path.join(process.cwd(), "docs/ARCHITECTURE.md"), "utf8");
+    const architecture = fs.readFileSync(path.join(process.cwd(), "docs/contributing/architecture.md"), "utf8");
 
     expect(architecture).toContain("PRAGMA policy");
     expect(architecture).toContain("documented SQLite settings");
@@ -39,7 +39,7 @@ describe("review documentation regressions", () => {
   });
 
   it("documents the current Bun runtime and bun:sqlite storage boundary [ARCH-01]", () => {
-    const architecture = fs.readFileSync(path.join(process.cwd(), "docs/ARCHITECTURE.md"), "utf8");
+    const architecture = fs.readFileSync(path.join(process.cwd(), "docs/contributing/architecture.md"), "utf8");
 
     expect(architecture).toContain("single-process Bun service");
     expect(architecture).toContain("SQLite via `bun:sqlite`");
@@ -55,14 +55,14 @@ describe("review documentation regressions", () => {
   });
 
   it("documents VACUUM INTO backup behavior [API-02]", () => {
-    const architecture = fs.readFileSync(path.join(process.cwd(), "docs/ARCHITECTURE.md"), "utf8");
+    const architecture = fs.readFileSync(path.join(process.cwd(), "docs/contributing/architecture.md"), "utf8");
 
     expect(architecture).toContain("Backup behavior");
     expect(architecture).toContain("VACUUM INTO");
   });
 
   it("does not describe PRAGMA policy in terms of a deleted compatibility shim [ARCH-07]", () => {
-    const architecture = fs.readFileSync(path.join(process.cwd(), "docs/ARCHITECTURE.md"), "utf8");
+    const architecture = fs.readFileSync(path.join(process.cwd(), "docs/contributing/architecture.md"), "utf8");
 
     expect(architecture).not.toContain("shim to support");
     expect(architecture).not.toContain("shim to support the known Node/Bun compatibility settings");
