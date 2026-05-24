@@ -17,7 +17,8 @@
     "check:dead": "knip",
     "check:types": "bun tsc --noEmit",
     "check:types-coverage": "type-coverage --at-least 95 --strict",
-    "build:bun": "bun run bunbuild.ts"
+    "build:bun": "bun run bunbuild.ts",
+    "setup": "bun run scripts/setup.ts"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.12.1",

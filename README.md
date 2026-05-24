@@ -1,16 +1,14 @@
 # vault-mcp
 
-MCP server that gives your agent direct, always-on access to your Obsidian vault - no plugin, no Obsidian process required.
+MCP server that gives your agent direct, always-on access to your Obsidian vault — no plugin, no Obsidian process required.
 
 ## Why vault-mcp?
 
-**The Local REST API plugin has a data-loss bug and requires Obsidian to stay open.** vault-mcp reads the vault directly from the filesystem, so it works whether Obsidian is running or not.
+**It works whether Obsidian is running or not** — reads the vault directly from the filesystem.
 
 **Most vault tools serve one client at a time.** vault-mcp runs an always-on HTTP server, so Claude Code and Claude Desktop can both connect to the same vault index simultaneously.
 
 **Keyword-only search misses concepts. Pure semantic search misses exact terms.** vault-mcp fuses FTS5 keyword ranking with vector embeddings into a single hybrid query, tunable per call.
-
-**No Python.** Pure TypeScript, runs on Bun. No conda, no venv, no pip.
 
 ## Features
 
@@ -38,25 +36,20 @@ MCP server that gives your agent direct, always-on access to your Obsidian vault
 
 ## Quick Start
 
-Requires [Bun](https://bun.sh) 1.3+ and an Obsidian vault.
+Requires [Bun](https://bun.sh) 1.3+.
 
 ```bash
 git clone https://github.com/videnovnebojsa/vault-mcp
 cd vault-mcp
-bun install && bun run build
-OBSIDIAN_VAULT_PATH=~/Documents/obsidian bun run start
-
-# run tests
-bun run test
-
-# Binary build scripts (standalone binary, no runtime required)
-bun run build:bun
-
-# Smoke test the built binary
-bun run scripts/smoke-test.ts
+bun install
+bun run setup
 ```
 
-**Claude Code** — add to `.mcp.json` in your project root:
+The setup script builds the binary, walks you through configuration, and installs a background service that starts automatically at login — **launchd** on macOS, **systemd** on Linux, **Task Scheduler** on Windows.
+
+### Connect Claude Code
+
+Add to `.mcp.json` in your project root:
 
 ```json
 {
@@ -66,7 +59,9 @@ bun run scripts/smoke-test.ts
 }
 ```
 
-**Claude Desktop** — add to `claude_desktop_config.json`:
+### Connect Claude Desktop
+
+Add to `claude_desktop_config.json`:
 
 ```json
 {
@@ -80,18 +75,48 @@ bun run scripts/smoke-test.ts
 }
 ```
 
-Health check: `curl http://localhost:3782/health`
+### Verify
+
+```bash
+curl http://localhost:3782/health
+# {"status":"ok","uptimeSeconds":12,...}
+```
+
+`/ready` returns HTTP 503 until the vault index finishes its initial sync; `/health` always returns 200.
+
+## Configuration
+
+All settings live in `~/.config/vault-mcp/.env`, including manual installs. The setup script writes this file with your answers and leaves every optional variable commented out with its default; if you install manually, start from [.env.example](.env.example) and write the final file to `~/.config/vault-mcp/.env`.
+
+To apply changes after editing:
+
+| Platform | Command |
+|---|---|
+| macOS | `launchctl kickstart -k gui/$UID/com.vault-mcp` |
+| Linux | `systemctl --user restart vault-mcp` |
+| Windows | `schtasks /End /TN vault-mcp && schtasks /Run /TN vault-mcp` |
+
+Re-running `bun run setup` offers an **Update config** option that rewrites the file and restarts the service without reinstalling.
+
+## Development
+
+```bash
+bun run test                      # run test suite
+bun run build                     # compile TypeScript → dist/
+bun run build:bun                 # Binary build scripts → dist-bin/ (standalone executable)
+bun run scripts/smoke-test.ts     # smoke test the built binary against a real vault
+bun run lint                      # biome check
+```
 
 ## Documentation
 
 | Topic | Link |
 |---|---|
-| Installation options (binary, service, Node) | [docs/installation.md](docs/installation.md) |
+| Installation options (manual, service) | [docs/installation.md](docs/installation.md) |
 | Connecting MCP clients | [docs/clients.md](docs/clients.md) |
+| Full configuration reference | [docs/CONFIGURATION.md](docs/CONFIGURATION.md) |
 | Full tool reference | [docs/tools.md](docs/tools.md) |
-| Configuration reference | [docs/CONFIGURATION.md](docs/CONFIGURATION.md) |
 | Architecture | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) |
-| Binary build scripts | [docs/installation.md](docs/installation.md) |
 
 ## License
 

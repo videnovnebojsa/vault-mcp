@@ -12,4 +12,13 @@ describe("documented test commands", () => {
     expect(pkg.scripts["test"]).toContain("--isolate");
     expect(readme).toContain("bun run test");
   });
+
+  it("keeps install docs aligned on the managed config path [SETUP-01]", () => {
+    const readme = fs.readFileSync(path.join(process.cwd(), "README.md"), "utf8");
+    const installation = fs.readFileSync(path.join(process.cwd(), "docs/installation.md"), "utf8");
+
+    expect(readme).toContain("~/.config/vault-mcp/.env");
+    expect(installation).toContain("~/.config/vault-mcp/.env");
+    expect(installation).toContain("~/Library/Logs/vault-mcp/vault-mcp.err");
+  });
 });
