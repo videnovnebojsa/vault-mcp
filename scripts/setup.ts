@@ -8,93 +8,37 @@
  */
 
 import { chmodSync, copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { homedir, userInfo } from "node:os";
+import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
-import { createInterface, type Interface } from "node:readline";
 import { $ } from "bun";
 
-// ── Platform detection ────────────────────────────────────────────────────────
+import {
+  ask,
+  BIN_DEST,
+  BIN_SRC,
+  CONFIG_DIR,
+  CONFIG_FILE,
+  closeReadline,
+  confirm,
+  expandHome,
+  fail,
+  isPortInUse,
+  LOG_DIR,
+  LOG_ERR_FILE,
+  LOG_FILE,
+  ok,
+  PLATFORM,
+  print,
+  prompt,
+  restartCommand,
+  restartService,
+  section,
+  waitForHealth,
+} from "./lib/cli-helpers.ts";
+import { renderEnvTemplate, writeEnvFile } from "./lib/env-io.ts";
 
-type Platform = "macos" | "linux" | "windows";
-
-function detectPlatform(): Platform {
-  switch (process.platform) {
-    case "darwin":
-      return "macos";
-    case "linux":
-      return "linux";
-    case "win32":
-      return "windows";
-    default:
-      return "linux";
-  }
-}
-
-const PLATFORM = detectPlatform();
-
-const CONFIG_DIR = join(homedir(), ".config", "vault-mcp");
-const CONFIG_FILE = join(CONFIG_DIR, ".env");
-const LOG_DIR = PLATFORM === "macos" ? join(homedir(), "Library", "Logs", "vault-mcp") : join(CONFIG_DIR, "logs");
-const LOG_FILE = join(LOG_DIR, "vault-mcp.log");
-const LOG_ERR_FILE = join(LOG_DIR, "vault-mcp.err");
-
-const LOCAL_APP_DATA = process.env["LOCALAPPDATA"] ?? join(homedir(), "AppData", "Local");
-
-const BIN_DEST: Record<Platform, string> = {
-  macos: join(homedir(), ".local", "bin", "vault-mcp"),
-  linux: join(homedir(), ".local", "bin", "vault-mcp"),
-  windows: join(LOCAL_APP_DATA, "vault-mcp", "vault-mcp.exe"),
-};
-
-const BIN_SRC = join(process.cwd(), "dist-bin", PLATFORM === "windows" ? "vault-mcp.exe" : "vault-mcp");
-
-// ── CLI helpers ───────────────────────────────────────────────────────────────
-
-let rl: Interface | null = null;
-
-function ensureReadline(): Interface {
-  rl ??= createInterface({ input: process.stdin, output: process.stdout });
-  return rl;
-}
-
-function closeReadline(): void {
-  rl?.close();
-  rl = null;
-}
-
-function ask(question: string): Promise<string> {
-  return new Promise((res) => ensureReadline().question(question, res));
-}
-
-async function prompt(label: string, defaultValue = ""): Promise<string> {
-  const hint = defaultValue ? ` [${defaultValue}]` : "";
-  const answer = await ask(`    ${label}${hint}: `);
-  return answer.trim() || defaultValue;
-}
-
-async function confirm(label: string, defaultYes = false): Promise<boolean> {
-  const hint = defaultYes ? "Y/n" : "y/N";
-  const answer = await ask(`    ${label} (${hint}): `);
-  const t = answer.trim().toLowerCase();
-  if (!t) return defaultYes;
-  return t === "y" || t === "yes";
-}
-
-function print(msg: string): void {
-  process.stdout.write(`${msg}\n`);
-}
-function ok(msg: string): void {
-  print(`  ✔  ${msg}`);
-}
-function warn(msg: string): void {
-  print(`  ⚠  ${msg}`);
-}
-function fail(msg: string): void {
-  print(`  ✘  ${msg}`);
-}
-function section(title: string): void {
-  print(`\n  ${title}\n  ${"─".repeat(title.length)}`);
-}
+// Re-export for test compat (src/setup-script.test.ts imports these)
+export { expandHome } from "./lib/cli-helpers.ts";
 
 // ── Step 1: Bun version check ─────────────────────────────────────────────────
 
@@ -124,48 +68,6 @@ async function buildBinary(): Promise<void> {
 }
 
 // ── Step 3: Interactive config prompts ────────────────────────────────────────
-
-function lookupHomeDir(username: string): string | null {
-  if (PLATFORM === "windows") return null;
-  if (username === userInfo().username) return homedir();
-
-  try {
-    const passwd = readFileSync("/etc/passwd", "utf8");
-    for (const line of passwd.split("\n")) {
-      if (!line) continue;
-      const [name, , , , , home] = line.split(":");
-      if (name === username && home) return home;
-    }
-  } catch {
-    return null;
-  }
-
-  return null;
-}
-
-export function expandHome(p: string): string {
-  if (p === "~") return homedir();
-  if (p.startsWith("~/")) return join(homedir(), p.slice(2));
-  if (!p.startsWith("~")) return p;
-
-  const slashIndex = p.indexOf("/");
-  const username = p.slice(1, slashIndex === -1 ? undefined : slashIndex);
-  const remainder = slashIndex === -1 ? "" : p.slice(slashIndex + 1);
-  const home = lookupHomeDir(username);
-  if (!home) return p;
-  if (!remainder) return home;
-  return join(home, remainder);
-}
-
-async function isPortInUse(port: number): Promise<boolean> {
-  try {
-    const server = Bun.serve({ port, hostname: "127.0.0.1", fetch: () => new Response() });
-    server.stop();
-    return false;
-  } catch {
-    return true;
-  }
-}
 
 interface ExtraVault {
   name: string;
@@ -288,89 +190,34 @@ async function promptConfig(existingConfig: ExistingSetupConfig = {}): Promise<S
     embeddingApiKey = await prompt("  Embedding API key");
   }
 
-  return { vaultPath, port, apiKey, extraVaults, enableEmbeddings, embeddingEndpoint, embeddingApiKey };
+  return {
+    vaultPath,
+    port,
+    apiKey,
+    extraVaults,
+    enableEmbeddings,
+    embeddingEndpoint,
+    embeddingApiKey,
+  };
 }
 
 // ── Step 4: Write .env file ───────────────────────────────────────────────────
 
-function buildEnvFile(cfg: SetupConfig, restartCmd: string): string {
-  const vaultPathsLine =
-    cfg.extraVaults.length > 0
-      ? `VAULT_PATHS=${cfg.extraVaults.map((v) => `${v.name}:${v.path}`).join(";")}`
-      : `# VAULT_PATHS=work:~/vaults/work;archive:~/vaults/archive`;
-
-  const apiKeyLine = cfg.apiKey
-    ? `MCP_API_KEY=${cfg.apiKey}`
-    : `# MCP_API_KEY=                       # Bearer token; empty = local-only`;
-
-  const embeddingLines = cfg.enableEmbeddings
-    ? [
-        `ENABLE_EMBEDDINGS=true`,
-        `EMBEDDING_ENDPOINT=${cfg.embeddingEndpoint}`,
-        `EMBEDDING_API_KEY=${cfg.embeddingApiKey}`,
-      ].join("\n")
-    : [
-        `# ENABLE_EMBEDDINGS=false`,
-        `# EMBEDDING_ENDPOINT=               # e.g. https://api.openai.com/v1`,
-        `# EMBEDDING_API_KEY=`,
-      ].join("\n");
-
-  return `# vault-mcp configuration
-# Generated by setup on ${new Date().toISOString().slice(0, 10)}
-# Edit this file to change settings, then restart: ${restartCmd}
-# Full reference: https://github.com/videnovnebojsa/vault-mcp/blob/main/docs/configuration.md
-
-# ── Vault Paths ───────────────────────────────────────────────────────────────
-OBSIDIAN_VAULT_PATH=${cfg.vaultPath}
-${vaultPathsLine}
-# MEMORY_DB_PATH=                      # default: {vault}/.vault-search.db
-
-# ── HTTP Server ───────────────────────────────────────────────────────────────
-MCP_PORT=${cfg.port}
-# MCP_HOST=127.0.0.1                   # 0.0.0.0 to expose on the network
-${apiKeyLine}
-# MCP_HTTP_BODY_LIMIT_BYTES=1048576
-# MCP_MAX_SESSIONS=100
-# MCP_SESSION_IDLE_MS=1800000          # 30 minutes
-
-# ── Vector Embeddings ─────────────────────────────────────────────────────────
-${embeddingLines}
-# EMBEDDING_MODEL=text-embedding-3-small
-# HYBRID_ALPHA=0.5                     # 0=pure semantic, 1=pure keyword
-# EMBED_BATCH_SIZE=20
-# QUERY_EMBEDDING_CACHE_MAX=128
-
-# ── Capture Pipeline ──────────────────────────────────────────────────────────
-# ENABLE_CAPTURE_PIPELINE=false
-# CLASSIFY_RULES_PATH=                 # path to JSON rules file
-# LOG_RAW_INPUT=false
-
-# ── Periodic Notes ────────────────────────────────────────────────────────────
-# PERIODIC_NOTES_ROOT=Journal
-
-# ── Backup ────────────────────────────────────────────────────────────────────
-# ENABLE_DB_BACKUP=true
-# DB_BACKUP_DIR=                       # default: {vault}/.vault-backups
-# DB_BACKUP_MAX_KEEP=5
-
-# ── File Watcher ──────────────────────────────────────────────────────────────
-# ENABLE_FILE_WATCHER=true
-# FILE_WATCHER_DEBOUNCE_MS=300
-
-# ── Access Control ────────────────────────────────────────────────────────────
-# VAULT_ALLOW_PATHS=                   # comma-separated vault-relative allowlist
-# VAULT_DENY_PATHS=                    # comma-separated denylist (applied after allow)
-
-# ── Logging & Monitoring ──────────────────────────────────────────────────────
-# LOG_LEVEL=info                       # debug | info | warn | error
-# LOG_FORMAT=text                      # text | json
-# ALERT_WEBHOOK_URL=
-# ENABLE_OTEL=false
-# OTEL_EXPORTER_OTLP_ENDPOINT=
-
-# ── Advanced ──────────────────────────────────────────────────────────────────
-# TOOL_TIMEOUT_MS=30000                # 0 = disabled
-`;
+/** Convert a SetupConfig into a flat Map of env var values. */
+function cfgToMap(cfg: SetupConfig): Map<string, string> {
+  const values = new Map<string, string>();
+  values.set("OBSIDIAN_VAULT_PATH", cfg.vaultPath);
+  values.set("MCP_PORT", String(cfg.port));
+  if (cfg.apiKey) values.set("MCP_API_KEY", cfg.apiKey);
+  if (cfg.extraVaults.length > 0) {
+    values.set("VAULT_PATHS", cfg.extraVaults.map((v) => `${v.name}:${v.path}`).join(";"));
+  }
+  if (cfg.enableEmbeddings) {
+    values.set("ENABLE_EMBEDDINGS", "true");
+    values.set("EMBEDDING_ENDPOINT", cfg.embeddingEndpoint);
+    values.set("EMBEDDING_API_KEY", cfg.embeddingApiKey);
+  }
+  return values;
 }
 
 function ensureLogDir(): void {
@@ -389,19 +236,22 @@ function installBinary(): void {
 
 // ── Step 6: Service installation ─────────────────────────────────────────────
 
-async function installService(): Promise<string> {
+async function installService(): Promise<void> {
   const binPath = BIN_DEST[PLATFORM];
   switch (PLATFORM) {
     case "macos":
-      return installMacos(binPath);
+      await installMacos(binPath);
+      break;
     case "linux":
-      return installLinux(binPath);
+      await installLinux(binPath);
+      break;
     case "windows":
-      return installWindows(binPath);
+      await installWindows(binPath);
+      break;
   }
 }
 
-async function installMacos(binPath: string): Promise<string> {
+async function installMacos(binPath: string): Promise<void> {
   const plistDir = join(homedir(), "Library", "LaunchAgents");
   const plistPath = join(plistDir, "com.vault-mcp.plist");
 
@@ -434,15 +284,13 @@ async function installMacos(binPath: string): Promise<string> {
   mkdirSync(plistDir, { recursive: true });
   writeFileSync(plistPath, plist);
 
-  // Unload first in case a previous version is running
   await $`launchctl unload ${plistPath}`.quiet().nothrow();
   await $`launchctl load ${plistPath}`.quiet();
 
   ok(`launchd service installed → ${plistPath}`);
-  return `launchctl kickstart -k gui/$UID/com.vault-mcp`;
 }
 
-async function installLinux(binPath: string): Promise<string> {
+async function installLinux(binPath: string): Promise<void> {
   const unitDir = join(homedir(), ".config", "systemd", "user");
   const unitPath = join(unitDir, "vault-mcp.service");
 
@@ -468,13 +316,11 @@ WantedBy=default.target
   await $`systemctl --user enable --now vault-mcp`.quiet();
 
   ok(`systemd user service installed → ${unitPath}`);
-  return "systemctl --user restart vault-mcp";
 }
 
-async function installWindows(binPath: string): Promise<string> {
+async function installWindows(binPath: string): Promise<void> {
   const xmlPath = join(CONFIG_DIR, "vault-mcp-task.xml");
 
-  // Task Scheduler XML — ONLOGON trigger, no time limit, auto-restart on failure
   const xml = `<?xml version="1.0" encoding="UTF-16"?>
 <Task version="1.2" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
   <Triggers>
@@ -502,28 +348,6 @@ async function installWindows(binPath: string): Promise<string> {
   await $`schtasks /Run /TN vault-mcp`.quiet();
 
   ok("Task Scheduler task registered and started");
-  return "schtasks /End /TN vault-mcp && schtasks /Run /TN vault-mcp";
-}
-
-// ── Step 7: Health check ──────────────────────────────────────────────────────
-
-async function waitForHealth(port: number): Promise<boolean> {
-  process.stdout.write("  Waiting for server");
-  for (let i = 0; i < 30; i++) {
-    await Bun.sleep(500);
-    process.stdout.write(".");
-    try {
-      const r = await fetch(`http://127.0.0.1:${port}/health`);
-      if (r.ok) {
-        print(" ✔");
-        return true;
-      }
-    } catch {
-      /* not up yet */
-    }
-  }
-  print(" ✘");
-  return false;
 }
 
 // ── Re-install detection ──────────────────────────────────────────────────────
@@ -540,22 +364,6 @@ async function detectMode(): Promise<"fresh" | "update" | "exit"> {
     default:
       return "exit";
   }
-}
-
-async function restartService(): Promise<void> {
-  switch (PLATFORM) {
-    case "macos":
-      await $`launchctl kickstart -k gui/$UID/com.vault-mcp`.quiet().nothrow();
-      break;
-    case "linux":
-      await $`systemctl --user restart vault-mcp`.quiet().nothrow();
-      break;
-    case "windows":
-      await $`schtasks /End /TN vault-mcp`.quiet().nothrow();
-      await $`schtasks /Run /TN vault-mcp`.quiet().nothrow();
-      break;
-  }
-  ok("Service restarted");
 }
 
 // ── Main ──────────────────────────────────────────────────────────────────────
@@ -583,19 +391,11 @@ async function main(): Promise<void> {
   }
 
   const cfg = await promptConfig(existingConfig);
-
-  // Derive restart command before writing .env (it's embedded in the header comment)
-  const restartCmd =
-    PLATFORM === "macos"
-      ? "launchctl kickstart -k gui/$UID/com.vault-mcp"
-      : PLATFORM === "linux"
-        ? "systemctl --user restart vault-mcp"
-        : "schtasks /End /TN vault-mcp && schtasks /Run /TN vault-mcp";
+  const restartCmd = restartCommand();
 
   section("Writing config");
   mkdirSync(CONFIG_DIR, { recursive: true });
-  writeFileSync(CONFIG_FILE, buildEnvFile(cfg, restartCmd));
-  if (PLATFORM !== "windows") chmodSync(CONFIG_FILE, 0o600);
+  writeEnvFile(CONFIG_FILE, cfgToMap(cfg), restartCmd);
   ok(`Config written → ${CONFIG_FILE}`);
 
   const shouldRefreshService = mode === "fresh" || PLATFORM === "macos";
@@ -640,6 +440,7 @@ async function main(): Promise<void> {
     }
 
   To change settings later:
+    bun run configure
     edit  ${CONFIG_FILE}
     then  ${restartCmd}
 `);

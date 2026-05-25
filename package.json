@@ -18,7 +18,8 @@
     "check:types": "bun tsc --noEmit",
     "check:types-coverage": "type-coverage --at-least 95 --strict",
     "build:bun": "bun run bunbuild.ts",
-    "setup": "bun run scripts/setup.ts"
+    "setup": "bun run scripts/setup.ts",
+    "configure": "bun run scripts/configure.ts"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.12.1",
