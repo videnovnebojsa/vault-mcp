@@ -121,7 +121,7 @@ vault/repository.ts    search/store.ts (SQLite)
 - **Single error boundary**: `wrapHandler` is the only `try/catch` in the tool dispatch path. Handlers throw freely; `wrapHandler` converts to `ToolResult` and marks the OTel span.
 - **Readiness vs liveness**: `GET /ready` returns 503 while vaults are booting. `GET /health` always returns 200.
 
-See `docs/DESIGN_STANDARDS.md` for the full set of rules and the reasoning behind each.
+See `docs/contributing/design-standards.md` for the full set of rules and the reasoning behind each.
 
 ## Database
 
