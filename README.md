@@ -109,7 +109,7 @@ Re-running `bun run setup` offers an **Update config** option that rewrites the 
 ## Development
 
 ```bash
-bun test --isolate                # run test suite
+bun run test                      # run test suite
 bun run build                     # compile TypeScript → dist/
 bun run build:bun                 # Binary build scripts → dist-bin/ (standalone executable)
 bun run scripts/smoke-test.ts     # smoke test the built binary against a real vault
