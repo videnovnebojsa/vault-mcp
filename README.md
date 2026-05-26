@@ -1,5 +1,9 @@
 # vault-mcp
 
+[![CI](https://github.com/videnovnebojsa/vault-mcp/actions/workflows/ci.yml/badge.svg)](https://github.com/videnovnebojsa/vault-mcp/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![Bun ≥ 1.3](https://img.shields.io/badge/bun-%E2%89%A51.3-black?logo=bun&logoColor=white)](https://bun.sh)
+
 MCP server that gives your agent direct, always-on access to your Obsidian vault — no plugin, no Obsidian process required.
 
 ## Why vault-mcp?
@@ -9,6 +13,10 @@ MCP server that gives your agent direct, always-on access to your Obsidian vault
 **Most vault tools serve one client at a time.** vault-mcp runs an always-on HTTP server, so Claude Code and Claude Desktop can both connect to the same vault index simultaneously.
 
 **Keyword-only search misses concepts. Pure semantic search misses exact terms.** vault-mcp fuses FTS5 keyword ranking with vector embeddings into a single hybrid query, tunable per call.
+
+## Demo
+
+![vault-mcp demo](docs/demo.gif)
 
 ## Features
 
@@ -101,7 +109,7 @@ Re-running `bun run setup` offers an **Update config** option that rewrites the 
 ## Development
 
 ```bash
-bun run test                      # run test suite
+bun test --isolate                # run test suite
 bun run build                     # compile TypeScript → dist/
 bun run build:bun                 # Binary build scripts → dist-bin/ (standalone executable)
 bun run scripts/smoke-test.ts     # smoke test the built binary against a real vault
@@ -128,4 +136,4 @@ bun run lint                      # biome check
 
 ## License
 
-MIT
+[MIT](LICENSE)
