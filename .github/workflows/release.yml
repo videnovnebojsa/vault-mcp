@@ -27,7 +27,7 @@ jobs:
             artifact: vault-mcp-linux-x64
           - os: macos-latest
             artifact: vault-mcp-macos-arm64
-          - os: macos-13
+          - os: macos-15-intel
             artifact: vault-mcp-macos-x64
           - os: windows-latest
             artifact: vault-mcp-windows-x64.exe
