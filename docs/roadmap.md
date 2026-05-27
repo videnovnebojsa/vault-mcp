@@ -1,24 +1,38 @@
 # Roadmap
 
-## v0.1 — Shipped
+## v0.1.0 — Initial Release (2026-05-27)
 
-- 16 core MCP tools (read, write, search, move, delete, capture, sync, embed, backup)
-- Hybrid FTS5 + vector search with date/tag filters
-- Backlink-aware `vault_move_note` (rewrites `[[wikilinks]]`)
-- Soft delete to `.trash/`
-- Heuristic capture pipeline
-- SQLite search index with incremental file watcher sync
-- HTTP server with session management + Bearer auth
+**Core MCP tools (20 total)**
+- `vault_read_note`, `vault_write_note`, `vault_delete_note`, `vault_move_note`
+- `vault_search` — hybrid FTS5 + vector search with date/tag/type filters
+- `vault_capture` — heuristic capture pipeline with inbox routing
+- `vault_classify` — auto-classify notes by content
+- `vault_triage_inbox` — classify and move all inbox notes in one call
+- `vault_sync`, `vault_embed_backlog` — incremental file watcher sync + embedding backfill
+- `vault_batch` — move/delete/update multiple notes in one call
+- `vault_list_folder` — enriched with search-index metadata (tags, type)
+- `vault_list_tags`, `vault_list_vaults`
+- `vault_periodic_note` — open/create daily, weekly, monthly notes
+- `vault_read_note_with_links` — backlink-aware read with resolved wikilinks
+- `vault_read_section` — read a single heading section from a note
+- `vault_update_properties` — update frontmatter fields in place
+- `vault_find_connections` — surface semantically related notes
+- `vault_backup_db` — snapshot the SQLite search index
+
+**Infrastructure**
+- HTTP server with session management and Bearer auth
 - stdio ↔ HTTP bridge for Claude Desktop
+- Multi-vault support — `VaultManager` registry, `VAULT_<NAME>_PATH` env vars, `vault` param on all tools
+- Configurable folder names via `VAULT_FOLDER_*` env vars
+- WAL mode SQLite with covering indexes for embeddings
+- OpenTelemetry tracing — per-tool-call latency spans via `wrapHandler`
+- Cross-platform standalone binaries — Linux x64, macOS arm64, macOS x64, Windows x64
+- 973-test suite with 80% line/function coverage gate
+- Lefthook pre-commit (biome + gitleaks) and pre-push (typecheck + tests) hooks
 
-## v0.2 — In Progress
+---
 
-- [x] `vault_triage_inbox` — auto-classify and move inbox notes
-- [x] `vault_periodic_note` — open/create daily, weekly, monthly notes
-- [x] `vault_batch` — move/delete/update multiple notes in one call
-- [x] `vault_list_folder` enriched with search-index metadata (tags, type)
-
-## v0.3 — Planned
+## v0.2 — Planned
 
 **Folder-level permissions**
 - `VAULT_ALLOW_PATHS` / `VAULT_DENY_PATHS` env vars
@@ -32,13 +46,7 @@
 - Explicit tests for Cyrillic headings, content, and search queries
 - Advertised as "explicitly tested" in README
 
-## v0.4 — In Progress
-
-- [x] **Multi-vault support** — `VaultManager` registry + `VAULT_PATHS` env var + `vault` param on all 20 tools + `vault_list_vaults` tool
-
-## v0.5+ — Backlog
+## v0.3 — Backlog
 
 - **Canvas file support** — read `.canvas` files (Obsidian JSON node-link format)
-- **OpenTelemetry tracing** — per-tool-call latency spans
 - **PDF/attachment reading** — extract text from PDFs linked in notes
-- **Bun single-binary** — `bun build --compile` for zero-install distribution
