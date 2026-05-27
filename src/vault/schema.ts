@@ -12,5 +12,3 @@ export const frontmatterSchema = z
     todoist_id: z.string().optional(),
   })
   .passthrough();
-
-export type FrontmatterInput = z.input<typeof frontmatterSchema>;

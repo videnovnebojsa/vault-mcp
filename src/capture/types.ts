@@ -7,7 +7,7 @@ export interface CaptureClassification {
   sensitivity?: "low" | "high";
 }
 
-export interface ExtractedTask {
+interface ExtractedTask {
   text: string;
   due_date: string | null;
   owner: string | null;

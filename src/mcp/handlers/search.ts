@@ -4,8 +4,8 @@ import type { VaultServices } from "../../vault/manager.js";
 import { isAclAllowed } from "../../vault/path-safety.js";
 import { errorResult, listResult, type ToolResult } from "../format.js";
 
-export const DEFAULT_QUERY_EMBEDDING_CACHE_MAX = 128;
-export const DEFAULT_QUERY_EMBEDDING_CACHE_TTL_MS = 300_000;
+const DEFAULT_QUERY_EMBEDDING_CACHE_MAX = 128;
+const DEFAULT_QUERY_EMBEDDING_CACHE_TTL_MS = 300_000;
 const queryEmbeddingCache = new Map<string, { embedding: Float32Array; expiresAt: number }>();
 
 export function resetQueryEmbeddingCache(): void {

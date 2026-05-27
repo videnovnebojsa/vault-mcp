@@ -15,7 +15,7 @@ import { $ } from "bun";
 
 export type Platform = "macos" | "linux" | "windows";
 
-export function detectPlatform(): Platform {
+function detectPlatform(): Platform {
   switch (process.platform) {
     case "darwin":
       return "macos";
@@ -30,7 +30,7 @@ export function detectPlatform(): Platform {
 
 export const PLATFORM = detectPlatform();
 
-export const LOCAL_APP_DATA = process.env["LOCALAPPDATA"] ?? join(homedir(), "AppData", "Local");
+const LOCAL_APP_DATA = process.env["LOCALAPPDATA"] ?? join(homedir(), "AppData", "Local");
 
 export const CONFIG_DIR = join(homedir(), ".config", "vault-mcp");
 export const CONFIG_FILE = join(CONFIG_DIR, ".env");

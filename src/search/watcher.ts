@@ -16,7 +16,7 @@ export interface VaultWatcherOptions {
   chokidarOptions?: ChokidarOptions;
 }
 
-export interface WatcherStats {
+interface WatcherStats {
   eventsProcessed: number;
   errors: number;
 }

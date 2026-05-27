@@ -1,5 +1,4 @@
 export { handleVaultBackupDb } from "./backup-db.js";
-export type { BatchOperation } from "./batch.js";
 export { handleVaultBatch } from "./batch.js";
 export { handleVaultCapture } from "./capture.js";
 export { handleVaultClassify } from "./classify.js";
@@ -14,8 +13,7 @@ export { handleVaultReadNoteWithLinks } from "./note-with-links.js";
 export { handleVaultPeriodicNote } from "./periodic-note.js";
 export { handleVaultReadNote } from "./read-note.js";
 export { handleVaultReadSection } from "./read-section.js";
-export type { VaultSearchArgs } from "./search.js";
-export { handleVaultSearch, resetQueryEmbeddingCache } from "./search.js";
+export { handleVaultSearch } from "./search.js";
 export { handleVaultSync } from "./sync.js";
 export { handleVaultTriageInbox } from "./triage-inbox.js";
 export { handleVaultUpdateProperties } from "./update-properties.js";

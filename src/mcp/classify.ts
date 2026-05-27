@@ -11,7 +11,7 @@ export interface ClassifyResult {
   tags: string[];
 }
 
-export const DEFAULT_CLASSIFY_RULES: ClassifyRules = {
+const DEFAULT_CLASSIFY_RULES: ClassifyRules = {
   person: {
     keywords: ["met", "spoke with", "talked to", "person", "contact", "meeting with", "conversation with"],
     folder: VAULT_FOLDERS.PEOPLE,

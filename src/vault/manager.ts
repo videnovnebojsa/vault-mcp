@@ -31,7 +31,7 @@ export interface SyncTracker {
   trackSync(p: Promise<void>): void;
 }
 
-export type EmbedProviderFactory = (cfg: EmbeddingConfig) => EmbedProvider;
+type EmbedProviderFactory = (cfg: EmbeddingConfig) => EmbedProvider;
 
 export interface CaptureService {
   processCapture(text: string): Promise<{

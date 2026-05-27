@@ -5,7 +5,7 @@ import { logger } from "../utils/logger.js";
 import { parseFrontmatter } from "../vault/frontmatter.js";
 import type { VaultSyncResult } from "./types.js";
 
-export interface VaultSyncStore {
+interface VaultSyncStore {
   upsert(
     canonicalPath: string,
     content: string,
@@ -18,7 +18,7 @@ export interface VaultSyncStore {
   deleteByPath(canonicalPath: string): boolean;
 }
 
-export interface VaultSyncOptions {
+interface VaultSyncOptions {
   vaultPath: string;
   store: VaultSyncStore;
 }

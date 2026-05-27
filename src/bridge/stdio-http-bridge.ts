@@ -177,7 +177,7 @@ export function buildErrorResponse(
   } as JSONRPCMessage;
 }
 
-export interface StdioHttpBridgeOptions {
+interface StdioHttpBridgeOptions {
   logger?: ChildLogger;
   onTerminate?: () => Promise<void> | void;
   classifyError?: (err: unknown) => ErrorClassification;

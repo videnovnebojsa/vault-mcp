@@ -21,12 +21,6 @@ export interface TriageResult {
   skipped: string[];
 }
 
-export interface TriageConfig {
-  autoMoveThreshold: number;
-  suggestThreshold: number;
-  inboxFolder: string;
-}
-
 export async function discoverVaultFolders(
   vaultRoot: string,
   excludeFolder: string,

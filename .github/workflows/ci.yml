@@ -44,7 +44,6 @@ jobs:
   dead-code:
     name: Dead Code
     runs-on: ubuntu-latest
-    continue-on-error: true  # pre-existing unused exports; remove once cleaned up
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6  # v2
@@ -91,7 +90,7 @@ jobs:
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6  # v2
         with: { bun-version: "1.x" }
       - run: bun install --frozen-lockfile
-      - run: bun test --coverage
+      - run: bun test --isolate --coverage
 
   audit:
     name: Dependency Audit

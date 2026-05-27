@@ -4,12 +4,12 @@ import path from "node:path";
 import { z } from "zod";
 import { logger } from "./utils/logger.js";
 
-export interface WatcherConfig {
+interface WatcherConfig {
   enabled: boolean;
   debounceMs: number;
 }
 
-export interface BackupConfig {
+interface BackupConfig {
   enabled: boolean;
   dir: string;
   maxBackups: number;
@@ -30,7 +30,7 @@ export interface CaptureConfig {
   logRawInput: boolean;
 }
 
-export interface ClassifyRuleEntry {
+interface ClassifyRuleEntry {
   keywords: string[];
   folder: string;
 }

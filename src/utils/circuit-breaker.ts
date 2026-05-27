@@ -1,7 +1,7 @@
 import { sendAlertFireAndForget } from "./alert-fire-and-forget.js";
 import { logger } from "./logger.js";
 
-export type CircuitState = "closed" | "open" | "half-open";
+type CircuitState = "closed" | "open" | "half-open";
 
 export class CircuitOpenError extends Error {
   constructor(public readonly circuitName: string) {
@@ -16,7 +16,7 @@ export interface CircuitBreakerOptions {
   windowMs?: number; // failure counting window (default: 60s)
 }
 
-export interface CircuitSnapshot {
+interface CircuitSnapshot {
   state: CircuitState;
   failureCount: number;
   lastFailureAt: string | null;
