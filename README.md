@@ -44,6 +44,27 @@ MCP server that gives your agent direct, always-on access to your Obsidian vault
 
 ## Quick Start
 
+### Option 1 — Quick install (no Bun required)
+
+Downloads the pre-built binary for your platform, walks you through configuration, and optionally installs a background service.
+
+```bash
+# macOS / Linux
+curl -fsSL https://raw.githubusercontent.com/videnovnebojsa/vault-mcp/main/install.sh | sh
+
+# Windows (PowerShell)
+irm https://raw.githubusercontent.com/videnovnebojsa/vault-mcp/main/install.ps1 | iex
+```
+
+To reconfigure after install (change vault path, port, etc.):
+
+```bash
+bash install.sh --configure    # macOS / Linux
+.\install.ps1 -Configure       # Windows
+```
+
+### Option 2 — Developer install (build from source)
+
 Requires [Bun](https://bun.sh) 1.3+.
 
 ```bash

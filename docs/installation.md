@@ -4,13 +4,56 @@
 
 | Requirement | Version | Notes |
 |---|---|---|
-| [Bun](https://bun.sh) | 1.3+ | Required for the setup script and Options A / B |
-| Node.js | 20+ | Required for Option C only |
-| Obsidian vault | — | Any local vault directory |
+| Obsidian vault | — | Any local vault directory (required for all options) |
+| [Bun](https://bun.sh) | 1.3+ | Required for Options B / C only |
+| Node.js | 20+ | Required for Option D only |
 
 ---
 
-## Option A — Setup script (recommended)
+## Option A — Quick install (no Bun required) ✦ recommended
+
+Downloads the pre-built binary for your platform, walks you through configuration, and optionally installs a background service — all without installing Bun or cloning the repo.
+
+```bash
+# macOS / Linux
+curl -fsSL https://raw.githubusercontent.com/videnovnebojsa/vault-mcp/main/install.sh | sh
+
+# Windows (PowerShell)
+irm https://raw.githubusercontent.com/videnovnebojsa/vault-mcp/main/install.ps1 | iex
+```
+
+**What the script asks:**
+
+| Prompt | Default | Notes |
+|---|---|---|
+| Vault path | — | Must exist; `~` is expanded |
+| Port | `3782` | Change if 3782 is in use |
+| API key | _(empty)_ | Leave empty for local-only use |
+| Enable embeddings? | N | Requires an OpenAI-compatible endpoint |
+
+**Config file:** `~/.config/vault-mcp/.env` (macOS/Linux) · `%APPDATA%\vault-mcp\.env` (Windows)  
+**Binary location:**
+- macOS / Linux → `~/.local/bin/vault-mcp`
+- Windows → `%LOCALAPPDATA%\vault-mcp\vault-mcp.exe`
+
+**Reconfigure anytime** (change vault path, port, API key, embeddings):
+
+```bash
+bash install.sh --configure    # macOS / Linux — skips download, re-prompts settings
+.\install.ps1 -Configure       # Windows
+```
+
+For advanced settings (access control, OpenTelemetry, backup, folder names, etc.) use the full interactive editor (requires Bun):
+
+```bash
+bun run configure
+```
+
+Or edit `~/.config/vault-mcp/.env` directly — see [configuration.md](configuration.md) for the full reference.
+
+---
+
+## Option B — Setup script (build from source)
 
 The setup script handles everything: builds the binary, walks through configuration, and installs a background service that starts automatically at login.
 
@@ -45,7 +88,7 @@ Everything else (backup, watcher, logging, capture pipeline, access control, etc
 
 ---
 
-## Option B — Manual (Bun)
+## Option C — Manual (Bun)
 
 Use this if you prefer not to run the setup script or want to manage the service yourself.
 
@@ -63,7 +106,7 @@ To run as a background service, create the service definition manually (see [Run
 
 ---
 
-## Option C — Compiled binary (manual)
+## Option D — Compiled binary (manual)
 
 Produces a standalone executable with no runtime dependency. The setup script does this automatically; use this option if you want the binary without the service install.
 
@@ -76,7 +119,7 @@ Copy the binary to a stable path, create `~/.config/vault-mcp/.env` from [.env.e
 
 ---
 
-## Option D — Node.js 20+
+## Option E — Node.js 20+
 
 ```bash
 git clone https://github.com/videnovnebojsa/vault-mcp
