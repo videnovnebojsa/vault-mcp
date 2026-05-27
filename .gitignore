@@ -10,9 +10,10 @@ logs/
 .env
 .env.local
 
-# Claude Code personal workflow — not for public repo
-.claude/
-CLAUDE.md
+# Claude Code — commit docs and rules, ignore personal settings
+.claude/settings*.json
+.claude/worktrees/
+/CLAUDE.md
 
 # Dev-workflow artifacts — not for public repo
 TODO.md
