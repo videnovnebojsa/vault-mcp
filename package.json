@@ -3,6 +3,12 @@
   "version": "0.1.0",
   "type": "module",
   "description": "Production-grade MCP server for Obsidian vaults — hybrid search, capture pipeline, backlink-aware operations",
+  "license": "MIT",
+  "homepage": "https://thinkink.io",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/videnovnebojsa/vault-mcp.git"
+  },
   "main": "dist/index.js",
   "scripts": {
     "build": "tsc",
