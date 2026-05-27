@@ -39,7 +39,7 @@ describe("logger", () => {
   it("emits structured JSON when imported with LOG_FORMAT=json in a fresh process [ARCH-05]", () => {
     const proc = Bun.spawnSync({
       cmd: [
-        "/Users/nebo/.bun/bin/bun",
+        process.execPath,
         "--eval",
         [
           'const { logger } = await import("./src/utils/logger.ts");',
