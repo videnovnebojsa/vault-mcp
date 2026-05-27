@@ -111,6 +111,19 @@ ${envLine(values, "ALERT_WEBHOOK_URL", "")}
 ${envLine(values, "ENABLE_OTEL", "false")}
 ${envLine(values, "OTEL_EXPORTER_OTLP_ENDPOINT", "")}
 
+# ── Vault Folder Names ────────────────────────────────────────────────────────
+# Override any folder to match your vault's structure. Leave blank to use the defaults.
+${envLine(values, "VAULT_FOLDER_INBOX", "00_Inbox", "low-confidence captures and unclassified notes")}
+${envLine(values, "VAULT_FOLDER_PROJECTS", "10_Projects", "project captures")}
+${envLine(values, "VAULT_FOLDER_ZETTELKASTEN", "30_Zettelkasten", "idea / atomic note captures")}
+${envLine(values, "VAULT_FOLDER_ARTEFACTS", "35_Artefacts", "excluded from connection detection")}
+${envLine(values, "VAULT_FOLDER_CANVASES", "36_Canvases", "excluded from connection detection")}
+${envLine(values, "VAULT_FOLDER_TEMPLATES", "50_Templates", "excluded from connection detection")}
+${envLine(values, "VAULT_FOLDER_AI_LOGS", "70_AI_Logs", "classification audit logs written here")}
+${envLine(values, "VAULT_FOLDER_PEOPLE", "80_People", "person captures")}
+${envLine(values, "VAULT_FOLDER_ADMIN", "90_Admin", "admin captures")}
+${envLine(values, "VAULT_FOLDER_ARCHIVE", "99_Archive", "excluded from connection detection")}
+
 # ── Advanced ──────────────────────────────────────────────────────────────────
 ${envLine(values, "TOOL_TIMEOUT_MS", "30000", "0 = disabled")}
 `;

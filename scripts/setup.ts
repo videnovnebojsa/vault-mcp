@@ -11,6 +11,7 @@ import { chmodSync, copyFileSync, existsSync, mkdirSync, readFileSync, writeFile
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { $ } from "bun";
+import { resolveVaultFolders } from "../src/config/folders.js";
 
 import {
   ask,
@@ -34,11 +35,30 @@ import {
   restartService,
   section,
   waitForHealth,
+  warn,
 } from "./lib/cli-helpers.ts";
-import { renderEnvTemplate, writeEnvFile } from "./lib/env-io.ts";
+import { writeEnvFile } from "./lib/env-io.ts";
 
 // Re-export for test compat (src/setup-script.test.ts imports these)
 export { expandHome } from "./lib/cli-helpers.ts";
+
+/**
+ * Create vault folders inside `vaultPath`. Returns the list of names created.
+ * Throws with the folder name in the message if any `mkdirSync` call fails.
+ */
+export function createVaultFolders(vaultPath: string, folderNames: string[]): string[] {
+  const created: string[] = [];
+  for (const folderName of folderNames) {
+    try {
+      mkdirSync(join(vaultPath, folderName), { recursive: true });
+      created.push(folderName);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      throw new Error(`Failed to create folder "${folderName}" in ${vaultPath}: ${msg}`);
+    }
+  }
+  return created;
+}
 
 // ── Step 1: Bun version check ─────────────────────────────────────────────────
 
@@ -132,6 +152,24 @@ async function promptConfig(existingConfig: ExistingSetupConfig = {}): Promise<S
       continue;
     }
     vaultPath = abs;
+  }
+
+  // Offer to create the recommended folder structure.
+  // If some folders already exist, warn so users aren't surprised (e.g. partial
+  // setup, pre-existing vault with custom names, or a re-run after partial failure).
+  const defaultFolderNames = Object.values(resolveVaultFolders());
+  const existingCount = defaultFolderNames.filter((f) => existsSync(join(vaultPath, f))).length;
+  const missingCount = defaultFolderNames.length - existingCount;
+  if (existingCount > 0 && missingCount > 0) {
+    warn(
+      `${existingCount} of ${defaultFolderNames.length} recommended folders already exist; ${missingCount} are missing.`,
+    );
+  }
+  if (missingCount > 0) {
+    if (await confirm("Create the recommended folder structure in your vault?")) {
+      createVaultFolders(vaultPath, defaultFolderNames);
+      ok(`Created ${defaultFolderNames.length} folders in ${vaultPath}`);
+    }
   }
 
   // Port — default 3782, validated

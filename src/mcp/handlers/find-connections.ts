@@ -1,3 +1,4 @@
+import type { VaultFolders } from "../../config/folders.js";
 import { findConnections } from "../../search/connections.js";
 import { VaultErrorCode } from "../../utils/errors.js";
 import type { VaultServices } from "../../vault/manager.js";
@@ -11,6 +12,7 @@ export async function handleVaultFindConnections(
     vault?: string | undefined;
   },
   services: VaultServices,
+  folders: VaultFolders,
 ): Promise<ToolResult> {
   const { embeddingStore, embedProvider, searchStore } = services;
   if (!embeddingStore || !embedProvider || !searchStore) {
@@ -23,6 +25,7 @@ export async function handleVaultFindConnections(
     searchStore,
     embeddingStore,
     embedProvider,
+    folders,
   });
   return successResult({ count: suggestions.length, suggestions });
 }

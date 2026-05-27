@@ -102,7 +102,13 @@ function isUnknownVaultError(err: unknown): boolean {
 
 export function registerTools(opts: RegisterToolsOptions): void {
   const { server, vaultManager } = opts;
-  const { periodicNotesRoot, backup: backupConfig, toolTimeoutMs: cfgTimeout, classifyRules } = vaultManager.config;
+  const {
+    periodicNotesRoot,
+    backup: backupConfig,
+    toolTimeoutMs: cfgTimeout,
+    classifyRules,
+    folders,
+  } = vaultManager.config;
   const toolTimeoutMs = cfgTimeout ?? 30_000;
 
   function wrapHandler<A extends Record<string, unknown>>(
@@ -222,11 +228,13 @@ export function registerTools(opts: RegisterToolsOptions): void {
   // ── vault_classify ────────────────────────────────────────────────────────
   server.tool(
     "vault_classify",
-    "Classify text and suggest a vault folder and title using keyword heuristics.",
+    "Classify text and suggest a vault folder and title using keyword heuristics. " +
+      "The suggested_folder is determined by the server's configured folder map (VAULT_FOLDER_* env vars) — " +
+      "it is a folder name, not a full path. Custom folder names without numeric prefixes are fully supported.",
     { text: z.string().max(10_000).describe("Text to classify"), vault: VAULT_PARAM },
     wrapHandler("vault_classify", async (args) => {
       const services = await getSvc(args.vault);
-      return handleVaultClassify(args, services, classifyRules);
+      return handleVaultClassify(args, services, classifyRules, folders);
     }),
   );
 
@@ -369,7 +377,9 @@ export function registerTools(opts: RegisterToolsOptions): void {
   // ── vault_capture ─────────────────────────────────────────────────────────
   server.tool(
     "vault_capture",
-    "Capture text into the vault. Classifies content and files it into the appropriate folder.",
+    "Capture text into the vault. Classifies content using keyword heuristics and files it into the " +
+      "operator-configured folder (set via VAULT_FOLDER_* env vars on the server). " +
+      "The target folder is determined server-side; you do not need to specify it.",
     { text: z.string().trim().min(1).max(100_000).describe("Text to capture"), vault: VAULT_PARAM },
     wrapHandler("vault_capture", async (args) => {
       const services = await getSvc(args.vault);
@@ -398,7 +408,7 @@ export function registerTools(opts: RegisterToolsOptions): void {
         .int()
         .min(1)
         .max(10_000)
-        .optional()
+        .default(500)
         .describe("Max notes to embed in this call (default 500). Call repeatedly until result.remaining === 0."),
       vault: VAULT_PARAM,
     },
@@ -423,7 +433,7 @@ export function registerTools(opts: RegisterToolsOptions): void {
     },
     wrapHandler("vault_find_connections", async (args) => {
       const services = await getSvc(args.vault);
-      return handleVaultFindConnections(args, services);
+      return handleVaultFindConnections(args, services, folders);
     }),
   );
 
@@ -455,13 +465,13 @@ export function registerTools(opts: RegisterToolsOptions): void {
         .min(1)
         .max(500)
         .refine((s) => !s.split("/").includes(".."), "Inbox folder must not contain '..' path components")
-        .default("00_Inbox")
-        .describe("Inbox folder path"),
+        .default(folders.INBOX)
+        .describe(`Inbox folder path (default: "${folders.INBOX}" from server config)`),
       vault: VAULT_PARAM,
     },
     wrapHandler("vault_triage_inbox", async (args) => {
       const services = await getSvc(args.vault);
-      return handleVaultTriageInbox(args, services);
+      return handleVaultTriageInbox(args, services, folders);
     }),
   );
 

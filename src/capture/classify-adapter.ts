@@ -1,8 +1,9 @@
-import { classify } from "../mcp/classify.js";
+import { VAULT_FOLDERS, type VaultFolders } from "../config/folders.js";
+import { classify } from "./classify.js";
 import type { CaptureClassification } from "./types.js";
 
-export function classifyWithHeuristic(text: string): CaptureClassification {
-  const result = classify(text);
+export function classifyWithHeuristic(text: string, folders: VaultFolders = VAULT_FOLDERS): CaptureClassification {
+  const result = classify(text, undefined, folders);
   return {
     category: result.category,
     confidence: result.confidence,

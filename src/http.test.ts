@@ -7,6 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, jest, mock } from "bun:tes
 import http from "node:http";
 import net from "node:net";
 import type { BootstrapResult } from "./bootstrap.js";
+import { VAULT_FOLDERS } from "./config/folders.js";
 import type { VaultConfig } from "./config.js";
 import {
   closeActiveSessionsForShutdown,
@@ -225,6 +226,7 @@ function makeBootstrap(vaultServices: Record<string, VaultServices> = {}): Boots
     acl: { allowPaths: [], denyPaths: [] },
     toolTimeoutMs: 30_000,
     classifyRules: undefined,
+    folders: VAULT_FOLDERS,
     enableOtel: false,
     otelEndpoint: "",
   };

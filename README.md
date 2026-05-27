@@ -108,6 +108,8 @@ This opens a section menu, prompts for each setting with validation, shows a dif
 bun run configure -- --section embeddings
 ```
 
+**Custom folder structure?** vault-mcp defaults to a numbered Zettelkasten-style layout. Run `bun run configure -- --section vault-folders` to remap the capture pipeline to your own folder names.
+
 To edit the file manually instead, open `~/.config/vault-mcp/.env` and restart the service when done:
 
 | Platform | Command |

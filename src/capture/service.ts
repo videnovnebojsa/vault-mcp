@@ -1,4 +1,3 @@
-import { VAULT_FOLDERS } from "../config/folders.js";
 import { logger } from "../utils/logger.js";
 import type { IVaultRepository } from "../vault/repository-interface.js";
 import { appendClassificationLog } from "./audit-log.js";
@@ -33,15 +32,20 @@ export class SecondBrainService {
     }
 
     // Classify via heuristic (LLM classification handled by caller if needed)
-    let classification = classifyWithHeuristic(content);
+    let classification = classifyWithHeuristic(content, this.config.folders);
     classification = sanitizeClassification(classification);
 
     // Route low-confidence, unknown, or sensitive to inbox
     const useInbox =
       classification.confidence < 0.7 || classification.category === "unknown" || classification.sensitivity === "high";
 
-    const folder = useInbox ? VAULT_FOLDERS.INBOX : undefined;
-    const notePath = buildCapturePath(classification.category, classification.suggested_title, folder);
+    const folder = useInbox ? this.config.folders.INBOX : undefined;
+    const notePath = buildCapturePath(
+      classification.category,
+      classification.suggested_title,
+      this.config.folders,
+      folder,
+    );
 
     // Write note
     const result = await this.vault.writeNote(notePath, {
@@ -64,6 +68,7 @@ export class SecondBrainService {
         this.config.vaultPath,
         classification,
         result.path,
+        this.config.folders,
         this.config.logRawInput ? content : undefined,
       );
     } catch (err) {

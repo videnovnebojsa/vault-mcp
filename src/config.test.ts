@@ -265,6 +265,57 @@ describe("outbound URL scheme validation", () => {
   });
 });
 
+// ── VAULT_FOLDER_* env vars ───────────────────────────────────────────────────
+
+describe("VAULT_FOLDER_* env vars", () => {
+  it("uses VAULT_FOLDER_INBOX when set", () => {
+    process.env["VAULT_FOLDER_INBOX"] = "MyInbox";
+    const { folders } = loadConfig();
+    expect(folders.INBOX).toBe("MyInbox");
+  });
+
+  it("falls back to default INBOX when VAULT_FOLDER_INBOX is not set", () => {
+    delete process.env["VAULT_FOLDER_INBOX"];
+    const { folders } = loadConfig();
+    expect(folders.INBOX).toBe("00_Inbox");
+  });
+
+  it("uses VAULT_FOLDER_PROJECTS when set", () => {
+    process.env["VAULT_FOLDER_PROJECTS"] = "Projects";
+    const { folders } = loadConfig();
+    expect(folders.PROJECTS).toBe("Projects");
+  });
+
+  it("falls back to defaults for all unset folder vars", () => {
+    // Ensure none are set
+    for (const key of [
+      "VAULT_FOLDER_INBOX",
+      "VAULT_FOLDER_PROJECTS",
+      "VAULT_FOLDER_ZETTELKASTEN",
+      "VAULT_FOLDER_PEOPLE",
+      "VAULT_FOLDER_ADMIN",
+      "VAULT_FOLDER_AI_LOGS",
+      "VAULT_FOLDER_ARCHIVE",
+      "VAULT_FOLDER_TEMPLATES",
+      "VAULT_FOLDER_ARTEFACTS",
+      "VAULT_FOLDER_CANVASES",
+    ]) {
+      delete process.env[key];
+    }
+    const { folders } = loadConfig();
+    expect(folders.INBOX).toBe("00_Inbox");
+    expect(folders.PROJECTS).toBe("10_Projects");
+    expect(folders.ZETTELKASTEN).toBe("30_Zettelkasten");
+    expect(folders.PEOPLE).toBe("80_People");
+    expect(folders.ADMIN).toBe("90_Admin");
+    expect(folders.AI_LOGS).toBe("70_AI_Logs");
+    expect(folders.ARCHIVE).toBe("99_Archive");
+    expect(folders.TEMPLATES).toBe("50_Templates");
+    expect(folders.ARTEFACTS).toBe("35_Artefacts");
+    expect(folders.CANVASES).toBe("36_Canvases");
+  });
+});
+
 // ── CLASSIFY_RULES_PATH ───────────────────────────────────────────────────────
 
 describe("CLASSIFY_RULES_PATH", () => {

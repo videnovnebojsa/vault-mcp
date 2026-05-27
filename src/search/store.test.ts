@@ -25,29 +25,15 @@ describe("VaultSearchStore", () => {
 
   it("warns when SQLite rejects WAL journal mode for a non-memory path [PERF-02]", () => {
     const warnSpy = spyOn(logger, "warn").mockImplementation(() => {});
-    // Force the WAL pragma to report "memory" regardless of SQLite version —
-    // some CI environments (newer SQLite on Linux) accept WAL for shared-memory
-    // URIs and would return "wal", making the warn never fire. We mock the
-    // pragma result so the test is deterministic across environments.
-    // Save the original before spyOn replaces it — Bun v1.3 doesn't expose .original.
-    const origPrepare = Database.prototype.prepare;
-    const prepareSpy = spyOn(Database.prototype, "prepare").mockImplementation(function (this: Database, sql: string) {
-      if (sql.includes("journal_mode = WAL")) {
-        return { get: () => ({ journal_mode: "memory" }) } as unknown as Statement;
-      }
-      return origPrepare.call(this, sql);
-    });
-    let uriStore: VaultSearchStore | undefined;
+    const uriStore = new VaultSearchStore("file::memory:?cache=shared");
     try {
-      uriStore = new VaultSearchStore("file::memory:?cache=shared");
       expect(warnSpy).toHaveBeenCalledWith("sqlite-shim", "WAL journal mode was not enabled", {
         dbPath: "file::memory:?cache=shared",
         journalMode: "memory",
       });
     } finally {
-      uriStore?.close();
-      prepareSpy.mockRestore();
-      warnSpy.mockRestore();
+      uriStore.close();
+      mock.restore();
     }
   });
 

@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { VAULT_FOLDERS } from "../config/folders.js";
 import { MockEmbedProvider } from "../search/embed-provider.js";
 import type { EmbeddingStore } from "../search/embeddings.js";
 import { VaultSearchStore } from "../search/store.js";
@@ -332,6 +333,7 @@ function makeTestManager(vault: any, overrides: TestOverrides = {}) {
       backup: overrides.backupConfig ?? { enabled: false, dir: "/tmp/backup", maxBackups: 5 },
       toolTimeoutMs: overrides.toolTimeoutMs,
       classifyRules: overrides.classifyRules,
+      folders: VAULT_FOLDERS,
     },
   };
 }
@@ -341,6 +343,7 @@ const MIN_VAULT_CONFIG = {
   backup: { enabled: false, dir: "/tmp/backup", maxBackups: 5 },
   toolTimeoutMs: undefined as number | undefined,
   classifyRules: undefined as unknown,
+  folders: VAULT_FOLDERS,
 };
 
 // ── shared stores ─────────────────────────────────────────────────────────────

@@ -2,7 +2,7 @@
  * Cross-reference gap detection — finds semantically similar notes that aren't linked.
  */
 import { setImmediate as yieldImmediate } from "node:timers/promises";
-import { DEFAULT_SKIP_CONNECTION_PREFIXES } from "../config/folders.js";
+import { resolveSkipConnectionPrefixes, VAULT_FOLDERS, type VaultFolders } from "../config/folders.js";
 import { extractWikilinks } from "../vault/markdown.js";
 import type { EmbedProvider } from "./embed-provider.js";
 import type { EmbeddingStore } from "./embeddings.js";
@@ -14,8 +14,20 @@ export interface ConnectionSuggestion {
   similarity: number;
 }
 
-function shouldSkip(path: string): boolean {
-  return DEFAULT_SKIP_CONNECTION_PREFIXES.some((prefix) => path.startsWith(prefix));
+// Memoize by object reference — the VaultFolders instance is stable within a
+// single boot, so we avoid re-allocating the prefixes array and closure on every
+// findConnections call.
+let _memoSkipFolders: VaultFolders | undefined;
+let _memoShouldSkip: ((path: string) => boolean) | undefined;
+
+function buildShouldSkip(folders?: VaultFolders): (path: string) => boolean {
+  const effective = folders ?? VAULT_FOLDERS;
+  if (effective !== _memoSkipFolders || !_memoShouldSkip) {
+    _memoSkipFolders = effective;
+    const prefixes = resolveSkipConnectionPrefixes(effective);
+    _memoShouldSkip = (path: string) => prefixes.some((prefix) => path.startsWith(prefix));
+  }
+  return _memoShouldSkip;
 }
 
 /**
@@ -45,10 +57,12 @@ export async function findConnections(opts: {
   searchStore: ISearchStore;
   embeddingStore: EmbeddingStore;
   embedProvider: EmbedProvider;
+  folders?: VaultFolders;
 }): Promise<ConnectionSuggestion[]> {
-  const { notePath, limit, minSimilarity, searchStore, embeddingStore, embedProvider } = opts;
+  const { notePath, limit, minSimilarity, searchStore, embeddingStore, embedProvider, folders } = opts;
 
   const pathIndex = searchStore.getPathIndex();
+  const shouldSkip = buildShouldSkip(folders);
 
   if (notePath) {
     return findConnectionsForNote(
@@ -59,10 +73,11 @@ export async function findConnections(opts: {
       embeddingStore,
       embedProvider,
       pathIndex,
+      shouldSkip,
     );
   }
 
-  return findConnectionsBatch(limit, minSimilarity, searchStore, embeddingStore, pathIndex);
+  return findConnectionsBatch(limit, minSimilarity, searchStore, embeddingStore, pathIndex, shouldSkip);
 }
 
 async function findConnectionsForNote(
@@ -73,6 +88,7 @@ async function findConnectionsForNote(
   embeddingStore: EmbeddingStore,
   embedProvider: EmbedProvider,
   pathIndex: Map<string, string>,
+  shouldSkip: (path: string) => boolean,
 ): Promise<ConnectionSuggestion[]> {
   const content = searchStore.getContentByPath(notePath);
   if (!content) return [];
@@ -124,6 +140,7 @@ async function findConnectionsBatch(
   searchStore: ISearchStore,
   embeddingStore: EmbeddingStore,
   pathIndex: Map<string, string>,
+  shouldSkip: (path: string) => boolean,
 ): Promise<ConnectionSuggestion[]> {
   const embeddedPaths = embeddingStore.getPaths().filter((p) => !shouldSkip(p));
 

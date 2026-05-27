@@ -2,6 +2,7 @@ import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import path from "node:path";
 import { z } from "zod";
+import { resolveVaultFolders, type VaultFolders } from "./config/folders.js";
 import { logger } from "./utils/logger.js";
 
 interface WatcherConfig {
@@ -55,6 +56,8 @@ export interface VaultConfig {
   toolTimeoutMs: number;
   /** Custom classification rules loaded from CLASSIFY_RULES_PATH, or undefined to use built-in defaults. */
   classifyRules: ClassifyRules | undefined;
+  /** Vault folder names, resolved from VAULT_FOLDER_* env vars (falls back to built-in defaults). */
+  folders: VaultFolders;
   /** Emit OpenTelemetry spans per tool call when true. */
   enableOtel: boolean;
   /** OTLP exporter endpoint (used only when enableOtel is true). */
@@ -184,6 +187,7 @@ export function loadConfig(): VaultConfig {
     },
     toolTimeoutMs: safeInt(process.env["TOOL_TIMEOUT_MS"], 30_000),
     classifyRules,
+    folders: resolveVaultFolders(),
     enableOtel: process.env["ENABLE_OTEL"] === "true",
     otelEndpoint: parseHttpUrlEnv("OTEL_EXPORTER_OTLP_ENDPOINT"),
   };

@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, mock } from "bun:test";
+import { VAULT_FOLDERS } from "../config/folders.js";
 import {
   classifyForTriageHeuristic,
   discoverVaultFolders,
@@ -77,7 +78,8 @@ describe("discoverVaultFolders", () => {
 });
 
 describe("classifyForTriageHeuristic", () => {
-  const folders = ["10_Projects", "20_People", "30_Ideas", "90_Admin"];
+  // availableFolders must include the VaultFolders defaults so keyword routing finds them
+  const folders = ["10_Projects", "20_People", "30_Zettelkasten", "90_Admin"];
 
   it("matches by type frontmatter", () => {
     const result = classifyForTriageHeuristic(
@@ -103,7 +105,7 @@ describe("classifyForTriageHeuristic", () => {
     expect(result.confidence).toBe(0.5);
   });
 
-  it("matches by content keywords", () => {
+  it("matches by content keywords to the configured zettelkasten folder", () => {
     const result = classifyForTriageHeuristic(
       "00_Inbox/test.md",
       "This is a brainstorm idea for the future",
@@ -111,7 +113,8 @@ describe("classifyForTriageHeuristic", () => {
       folders,
       "00_Inbox",
     );
-    expect(result.folder).toBe("30_Ideas");
+    // Routes to 30_Zettelkasten (the VAULT_FOLDERS default) — exact match
+    expect(result.folder).toBe("30_Zettelkasten");
     expect(result.confidence).toBe(0.4);
   });
 
@@ -125,6 +128,52 @@ describe("classifyForTriageHeuristic", () => {
     );
     expect(result.folder).toBe("00_Inbox");
     expect(result.confidence).toBe(0);
+  });
+
+  it("routes to configured custom folder by exact name [API-03]", () => {
+    // Custom folders without numeric prefixes
+    const customFolders = { ...VAULT_FOLDERS, PROJECTS: "ClientWork", PEOPLE: "Contacts" };
+    const availableFolders = ["ClientWork", "Contacts", "Admin"];
+
+    const projectResult = classifyForTriageHeuristic(
+      "00_Inbox/note.md",
+      "This is a project milestone for the sprint",
+      undefined,
+      availableFolders,
+      "00_Inbox",
+      customFolders,
+    );
+    expect(projectResult.folder).toBe("ClientWork");
+    expect(projectResult.confidence).toBeGreaterThan(0);
+
+    const personResult = classifyForTriageHeuristic(
+      "00_Inbox/note2.md",
+      "Met with Alice — 1:1 meeting",
+      undefined,
+      availableFolders,
+      "00_Inbox",
+      customFolders,
+    );
+    expect(personResult.folder).toBe("Contacts");
+  });
+
+  it("does not false-match wrong folder via substring when custom folder unavailable [API-03]", () => {
+    // User configured folders.PROJECTS = "projects" but vault still has "10_Projects"
+    const customFolders = { ...VAULT_FOLDERS, PROJECTS: "projects" };
+    // availableFolders does NOT have "projects" — it has the old "10_Projects"
+    const availableFolders = ["10_Projects", "80_People", "90_Admin"];
+
+    const result = classifyForTriageHeuristic(
+      "00_Inbox/note.md",
+      "This is about a project milestone and deadline",
+      undefined,
+      availableFolders,
+      "00_Inbox",
+      customFolders,
+    );
+    // Old code routes to "10_Projects" via "projects".includes substring match — wrong
+    // Fixed code should not route to "10_Projects" (it's not the configured folder)
+    expect(result.folder).not.toBe("10_Projects");
   });
 });
 
@@ -153,10 +202,31 @@ describe("triageInbox", () => {
     });
 
     expect(result.moved).toHaveLength(1);
-    expect(result.moved[0].destination).toBe("10_Projects");
+    // destination must be the full note path, not just the folder [API-06]
+    expect(result.moved[0]!.destination).toBe("10_Projects/note1.md");
     expect(vault.updateProperties).toHaveBeenCalledWith("00_Inbox/note1.md", { triaged: true });
     expect(vault.moveNote).toHaveBeenCalledWith("00_Inbox/note1.md", "10_Projects/note1.md");
     expect(sync.handleRename).toHaveBeenCalled();
+  });
+
+  it("dry-run moved[].destination is the full note path, not just the folder [API-06]", async () => {
+    const vault = mockVault([{ path: "00_Inbox/my-note.md", content: "project stuff" }]);
+    const classifications = new Map<string, TriageClassification>([
+      ["00_Inbox/my-note.md", { folder: "10_Projects", confidence: 0.95, reason: "project" }],
+    ]);
+
+    const result = await triageInbox({
+      vault,
+      autoMoveThreshold: 0.85,
+      suggestThreshold: 0.5,
+      inboxFolder: "00_Inbox",
+      dryRun: true,
+      classifications,
+    });
+
+    expect(result.moved).toHaveLength(1);
+    expect(result.moved[0]!.destination).toBe("10_Projects/my-note.md");
+    expect(vault.moveNote).not.toHaveBeenCalled();
   });
 
   it("uses heuristic when no external classifications provided", async () => {

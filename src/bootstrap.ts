@@ -63,7 +63,7 @@ export async function bootstrap(): Promise<BootstrapResult> {
   }
 
   const createCaptureService: CaptureFactory = ({ vaultPath, config: captureConfig, vault }) =>
-    new SecondBrainService({ vaultPath, ...captureConfig }, vault);
+    new SecondBrainService({ vaultPath, ...captureConfig, folders: config.folders }, vault);
   const vaultManager = new VaultManager(config.namedVaults, config, undefined, createCaptureService);
 
   return { config, vaultManager };

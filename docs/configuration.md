@@ -52,6 +52,25 @@ Custom classification rules file format:
 }
 ```
 
+## Vault Folder Names
+
+Folder names used by the capture pipeline and inbox triage. Override any of these to match your vault's existing structure.
+
+| Variable | Default | Description |
+|---|---|---|
+| `VAULT_FOLDER_INBOX` | `00_Inbox` | Low-confidence captures and unclassified notes |
+| `VAULT_FOLDER_PROJECTS` | `10_Projects` | Project captures |
+| `VAULT_FOLDER_ZETTELKASTEN` | `30_Zettelkasten` | Idea / atomic note captures |
+| `VAULT_FOLDER_ARTEFACTS` | `35_Artefacts` | Excluded from connection detection |
+| `VAULT_FOLDER_CANVASES` | `36_Canvases` | Excluded from connection detection |
+| `VAULT_FOLDER_TEMPLATES` | `50_Templates` | Excluded from connection detection |
+| `VAULT_FOLDER_AI_LOGS` | `70_AI_Logs` | Classification audit logs written here |
+| `VAULT_FOLDER_PEOPLE` | `80_People` | Person captures |
+| `VAULT_FOLDER_ADMIN` | `90_Admin` | Admin captures |
+| `VAULT_FOLDER_ARCHIVE` | `99_Archive` | Excluded from connection detection |
+
+Run `bun run configure -- --section vault-folders` to configure these interactively.
+
 ## Periodic Notes
 
 | Variable | Default | Description |

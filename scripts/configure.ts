@@ -44,7 +44,8 @@ type SettingType =
   | "float"
   | "http_url" // http:// or https:// only
   | "path_list" // comma-separated paths (no existence check)
-  | "vault_paths"; // semicolon-separated name:path pairs
+  | "vault_paths" // semicolon-separated name:path pairs
+  | "folder_name"; // single-component folder name (no "/" "\" ".." ".")
 
 interface Setting {
   key: string;
@@ -61,6 +62,7 @@ interface Setting {
 interface Section {
   id: string;
   title: string;
+  description?: string;
   settings: Setting[];
 }
 
@@ -244,6 +246,93 @@ export const SECTIONS: Section[] = [
         type: "boolean",
         default: "false",
         description: "Debug option: log unprocessed capture content.",
+      },
+    ],
+  },
+  {
+    id: "vault-folders",
+    title: "Vault Folder Names",
+    description: "Folder names used by the capture pipeline and triage. Change these to match your vault's structure.",
+    settings: [
+      {
+        key: "VAULT_FOLDER_INBOX",
+        label: "Inbox folder",
+        type: "folder_name",
+        optional: true,
+        default: "00_Inbox",
+        description: "Low-confidence captures and unclassified notes",
+      },
+      {
+        key: "VAULT_FOLDER_PROJECTS",
+        label: "Projects folder",
+        type: "folder_name",
+        optional: true,
+        default: "10_Projects",
+        description: "Project captures",
+      },
+      {
+        key: "VAULT_FOLDER_ZETTELKASTEN",
+        label: "Zettelkasten folder",
+        type: "folder_name",
+        optional: true,
+        default: "30_Zettelkasten",
+        description: "Idea / atomic note captures",
+      },
+      {
+        key: "VAULT_FOLDER_PEOPLE",
+        label: "People folder",
+        type: "folder_name",
+        optional: true,
+        default: "80_People",
+        description: "Person captures",
+      },
+      {
+        key: "VAULT_FOLDER_ADMIN",
+        label: "Admin folder",
+        type: "folder_name",
+        optional: true,
+        default: "90_Admin",
+        description: "Admin captures",
+      },
+      {
+        key: "VAULT_FOLDER_AI_LOGS",
+        label: "AI logs folder",
+        type: "folder_name",
+        optional: true,
+        default: "70_AI_Logs",
+        description: "Classification audit logs written here",
+      },
+      {
+        key: "VAULT_FOLDER_ARCHIVE",
+        label: "Archive folder",
+        type: "folder_name",
+        optional: true,
+        default: "99_Archive",
+        description: "Excluded from connection detection",
+      },
+      {
+        key: "VAULT_FOLDER_TEMPLATES",
+        label: "Templates folder",
+        type: "folder_name",
+        optional: true,
+        default: "50_Templates",
+        description: "Excluded from connection detection",
+      },
+      {
+        key: "VAULT_FOLDER_ARTEFACTS",
+        label: "Artefacts folder",
+        type: "folder_name",
+        optional: true,
+        default: "35_Artefacts",
+        description: "Excluded from connection detection",
+      },
+      {
+        key: "VAULT_FOLDER_CANVASES",
+        label: "Canvases folder",
+        type: "folder_name",
+        optional: true,
+        default: "36_Canvases",
+        description: "Excluded from connection detection",
       },
     ],
   },
@@ -481,8 +570,20 @@ export async function validateSetting(setting: Setting, raw: string, currentPort
       return null;
     }
 
-    case "string":
-    case "path_list":
+    case "folder_name": {
+      const trimmed = raw.trim();
+      if (trimmed.length === 0) {
+        return `Folder name cannot be empty. Enter a folder name or press Enter to keep the current value.`;
+      }
+      if (trimmed === "." || trimmed === "..") {
+        return `"${trimmed}" is a relative path component. Use a concrete folder name, not "." or "..".`;
+      }
+      if (/[/\\\0]/.test(trimmed)) {
+        return `Folder names must be a single path component — no "/", "\\", or null bytes.`;
+      }
+      return null;
+    }
+
     default:
       return null;
   }
@@ -554,8 +655,8 @@ async function pickSections(): Promise<Section[]> {
 
   const half = Math.ceil(SECTIONS.length / 2);
   for (let i = 0; i < half; i++) {
-    const left = `  ${i + 1}) ${SECTIONS[i]!.title}`;
-    const right = SECTIONS[i + half] ? `${i + half + 1}) ${SECTIONS[i + half]!.title}` : "";
+    const left = `  ${i + 1}) ${SECTIONS[i]?.title}`;
+    const right = SECTIONS[i + half] ? `${i + half + 1}) ${SECTIONS[i + half]?.title}` : "";
     print(left.padEnd(36) + right);
   }
   print("\n  0) All sections\n");

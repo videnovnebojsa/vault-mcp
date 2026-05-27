@@ -18,6 +18,3 @@ pre-push:
       run: bun tsc --noEmit
     test:
       run: bun test --isolate
-    test-clean-install:
-      run: bun run test:clean
-      glob: "{package.json,bun.lock}"

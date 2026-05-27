@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, mock, spyOn } from "bun:te
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { VAULT_FOLDERS } from "../../config/folders.js";
 import type { VaultSync } from "../../search/sync.js";
 import { MockVaultRepository } from "../../vault/repository-mock.js";
 import { makeServices } from "./test-helpers.js";
@@ -54,7 +55,8 @@ describe("handleVaultTriageInbox", () => {
 
     expect(result.isError).toBeFalsy();
     const data = JSON.parse(result.content[0]?.text ?? "{}").data;
-    expect(data.moved).toEqual([{ path: "00_Inbox/project-note.md", destination: "10_Projects" }]);
+    // destination is the full note path, not just the folder [API-06]
+    expect(data.moved).toEqual([{ path: "00_Inbox/project-note.md", destination: "10_Projects/project-note.md" }]);
     const moved = await vault.readNote("10_Projects/project-note");
     expect(moved.frontmatter.triaged).toBe(true);
     expect(vaultSync.handleRename).toHaveBeenCalledWith("00_Inbox/project-note.md", "10_Projects/project-note.md");
@@ -93,7 +95,8 @@ describe("handleVaultTriageInbox", () => {
     expect(result.isError).toBeFalsy();
     const data = JSON.parse(result.content[0]?.text ?? "{}").data;
     expect(data.moved).toHaveLength(1);
-    expect(data.moved[0].destination).toBe("10_Projects");
+    // destination is the full note path even in dry-run [API-06]
+    expect(data.moved[0]!.destination).toBe("10_Projects/idea-note.md");
     expect(moveNoteSpy).not.toHaveBeenCalled();
     expect(updatePropertiesSpy).not.toHaveBeenCalled();
     expect(vaultSync.handleRename).not.toHaveBeenCalled();
@@ -186,5 +189,34 @@ describe("handleVaultTriageInbox", () => {
     const data = JSON.parse(result.content[0]?.text ?? "{}").data;
     expect(data.moved).toHaveLength(1);
     expect(data.skipped).toHaveLength(1);
+  });
+
+  it("uses custom inbox folder from folders config as default [QA-01]", async () => {
+    const customFolders = { ...VAULT_FOLDERS, INBOX: "MyInbox" };
+    await fs.mkdir(path.join(tmpDir, "10_Projects"), { recursive: true });
+    const vault = new MockVaultRepository(tmpDir);
+    await vault.writeNote("MyInbox/project-note", {
+      content: "project milestone",
+      frontmatter: { type: "project" },
+    });
+    const services = makeServices({ vault });
+
+    const result = await handleVaultTriageInbox(
+      {
+        inbox_folder: "MyInbox",
+        auto_move_threshold: 0.5,
+        suggest_threshold: 0.3,
+        dry_run: false,
+        vault: "default",
+      },
+      services,
+      customFolders,
+    );
+
+    expect(result.isError).toBeFalsy();
+    const data = JSON.parse(result.content[0]?.text ?? "{}").data;
+    expect(data.moved).toHaveLength(1);
+    // destination should be full path in custom folder [API-06]
+    expect(data.moved[0]!.destination).toMatch(/^10_Projects\//);
   });
 });

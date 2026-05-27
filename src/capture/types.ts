@@ -1,3 +1,5 @@
+import type { VaultFolders } from "../config/folders.js";
+
 export interface CaptureClassification {
   category: "person" | "project" | "idea" | "admin" | "unknown";
   confidence: number;
@@ -26,4 +28,5 @@ export interface SecondBrainConfig {
   vaultPath: string;
   logRawInput: boolean;
   enableCapturePipeline: boolean;
+  folders: VaultFolders;
 }

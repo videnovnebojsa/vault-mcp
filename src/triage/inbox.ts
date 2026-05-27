@@ -1,5 +1,5 @@
 import { readdir } from "node:fs/promises";
-import { VAULT_FOLDERS } from "../config/folders.js";
+import { VAULT_FOLDERS, type VaultFolders } from "../config/folders.js";
 import type { VaultSync } from "../search/sync.js";
 import { VaultError, VaultErrorCode } from "../utils/errors.js";
 import { logger } from "../utils/logger.js";
@@ -7,6 +7,7 @@ import { isAclAllowed } from "../vault/path-safety.js";
 import type { IVaultRepository } from "../vault/repository-interface.js";
 import type { AclConfig } from "../vault/types.js";
 
+/** Strip numeric prefix for display or fallback matching (e.g. "10_Projects" → "Projects"). */
 const folderLabel = (path: string) => path.replace(/^\d+_/, "");
 
 export interface TriageClassification {
@@ -44,6 +45,7 @@ export function classifyForTriageHeuristic(
   frontmatter: Record<string, unknown> | undefined,
   availableFolders: string[],
   inboxFolder: string,
+  folders: VaultFolders = VAULT_FOLDERS,
 ): TriageClassification {
   const tags = Array.isArray(frontmatter?.["tags"]) ? (frontmatter["tags"] as string[]) : [];
   const type = typeof frontmatter?.["type"] === "string" ? (frontmatter["type"] as string) : "";
@@ -67,22 +69,34 @@ export function classifyForTriageHeuristic(
     }
   }
 
-  // Keyword matching (very basic)
-  const keywordMap: [string[], string][] = [
-    [["project", "milestone", "deadline", "sprint"], folderLabel(VAULT_FOLDERS.PROJECTS)],
-    [["person", "met with", "meeting", "1:1"], folderLabel(VAULT_FOLDERS.PEOPLE)],
-    [["idea", "brainstorm", "concept"], "Ideas"],
-    [["admin", "invoice", "tax", "receipt"], folderLabel(VAULT_FOLDERS.ADMIN)],
-    [["reference", "documentation", "guide", "howto"], "References"],
+  // Keyword routing for VaultFolders-backed categories: exact match only.
+  // Using the configured folder name directly avoids false-positive substring
+  // routing when a custom folder name overlaps with the label of a default folder.
+  const configuredKeywords: [string[], string][] = [
+    [["project", "milestone", "deadline", "sprint"], folders.PROJECTS],
+    [["person", "met with", "meeting", "1:1"], folders.PEOPLE],
+    [["idea", "brainstorm", "concept"], folders.ZETTELKASTEN],
+    [["admin", "invoice", "tax", "receipt"], folders.ADMIN],
   ];
 
-  for (const [keywords, sectionName] of keywordMap) {
+  for (const [keywords, configuredFolder] of configuredKeywords) {
     if (keywords.some((kw) => lowerContent.includes(kw))) {
-      const match = availableFolders.find((f) =>
-        f.replace(/^\d+_/, "").toLowerCase().includes(sectionName.toLowerCase()),
-      );
+      if (availableFolders.includes(configuredFolder)) {
+        return { folder: configuredFolder, confidence: 0.4, reason: `keyword match for "${configuredFolder}"` };
+      }
+    }
+  }
+
+  // Keyword routing for categories with no VaultFolders constant: stripped-label
+  // exact match so the search adapts to custom naming conventions.
+  const genericKeywords: [string[], string][] = [[["reference", "documentation", "guide", "howto"], "References"]];
+
+  for (const [keywords, labelName] of genericKeywords) {
+    if (keywords.some((kw) => lowerContent.includes(kw))) {
+      const labelLower = labelName.toLowerCase();
+      const match = availableFolders.find((f) => folderLabel(f).toLowerCase() === labelLower);
       if (match) {
-        return { folder: match, confidence: 0.4, reason: `keyword match for "${sectionName}"` };
+        return { folder: match, confidence: 0.4, reason: `keyword match for "${labelName}"` };
       }
     }
   }
@@ -98,6 +112,8 @@ export async function triageInbox(opts: {
   inboxFolder: string;
   dryRun?: boolean;
   acl?: AclConfig;
+  /** Configured folder names — used by the heuristic classifier to map keywords to the right folders. */
+  folders?: VaultFolders;
   /** External classifications (e.g., from LLM caller). Key is note path. */
   classifications?: Map<string, TriageClassification>;
 }): Promise<TriageResult> {
@@ -136,14 +152,21 @@ export async function triageInbox(opts: {
       // Use external classification if provided, otherwise heuristic
       const classification =
         opts.classifications?.get(note.path) ??
-        classifyForTriageHeuristic(note.path, noteData.content, noteData.frontmatter, availableFolders, inboxFolder);
+        classifyForTriageHeuristic(
+          note.path,
+          noteData.content,
+          noteData.frontmatter,
+          availableFolders,
+          inboxFolder,
+          opts.folders,
+        );
 
       if (classification.confidence >= autoMoveThreshold) {
-        if (!dryRun) {
-          // Determine destination path
-          const fileName = note.path.split("/").at(-1) ?? note.path;
-          const destPath = `${classification.folder}/${fileName}`;
+        // Compute the full destination path regardless of dryRun so it's accurate in the result
+        const fileName = note.path.split("/").at(-1) ?? note.path;
+        const destPath = `${classification.folder}/${fileName}`;
 
+        if (!dryRun) {
           await vault.updateProperties(note.path, { triaged: true });
           await vault.moveNote(note.path, destPath);
 
@@ -159,7 +182,7 @@ export async function triageInbox(opts: {
             );
           }
         }
-        result.moved.push({ path: note.path, destination: classification.folder });
+        result.moved.push({ path: note.path, destination: destPath });
       } else if (classification.confidence >= suggestThreshold) {
         result.suggested.push({
           path: note.path,

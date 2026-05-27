@@ -124,6 +124,39 @@ describe("renderEnvTemplate", () => {
     const output = renderEnvTemplate(new Map(), cmd);
     expect(output).toContain(`restart: ${cmd}`);
   });
+
+  it("emits active VAULT_FOLDER_* line when value is set [CFG-14]", () => {
+    const values = new Map([["VAULT_FOLDER_INBOX", "MyInbox"]]);
+    const output = renderEnvTemplate(values, "restart");
+    expect(output).toContain("VAULT_FOLDER_INBOX=MyInbox");
+  });
+
+  it("emits commented-out VAULT_FOLDER_* lines when values are absent [CFG-15]", () => {
+    const output = renderEnvTemplate(new Map(), "restart");
+    expect(output).toContain("# VAULT_FOLDER_INBOX=");
+    expect(output).toContain("# VAULT_FOLDER_PROJECTS=");
+    expect(output).toContain("# VAULT_FOLDER_ARCHIVE=");
+  });
+
+  it("round-trips VAULT_FOLDER_* values through render+parse [CFG-16]", () => {
+    const values = new Map([
+      ["VAULT_FOLDER_INBOX", "Inbox"],
+      ["VAULT_FOLDER_PROJECTS", "Projects"],
+      ["VAULT_FOLDER_ZETTELKASTEN", "Zettel"],
+    ]);
+    const rendered = renderEnvTemplate(values, "restart");
+    const dir = mkdtempSync(path.join(tmpdir(), "vault-mcp-cfg-test-"));
+    const f = path.join(dir, ".env");
+    try {
+      writeFileSync(f, rendered);
+      const parsed = parseEnvFile(f);
+      expect(parsed.get("VAULT_FOLDER_INBOX")).toBe("Inbox");
+      expect(parsed.get("VAULT_FOLDER_PROJECTS")).toBe("Projects");
+      expect(parsed.get("VAULT_FOLDER_ZETTELKASTEN")).toBe("Zettel");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
 });
 
 // ── validateSetting ───────────────────────────────────────────────────────────
@@ -224,6 +257,39 @@ describe("validateSetting", () => {
     expect(await validateSetting(s, "bad name:/tmp")).not.toBeNull(); // space in name
     expect(await validateSetting(s, "bad@name:/tmp")).not.toBeNull(); // @ in name
   });
+
+  it("accepts a plain folder name for VAULT_FOLDER_INBOX [CFG-33]", async () => {
+    const s = findSetting("VAULT_FOLDER_INBOX");
+    expect(await validateSetting(s, "MyInbox")).toBeNull();
+    expect(await validateSetting(s, "00_Inbox")).toBeNull();
+    expect(await validateSetting(s, "Inbox-2024")).toBeNull();
+  });
+
+  it("rejects forward slash in folder name [SEC-02-01]", async () => {
+    const s = findSetting("VAULT_FOLDER_INBOX");
+    expect(await validateSetting(s, "Inbox/sub")).not.toBeNull();
+  });
+
+  it("rejects backslash in folder name [SEC-02-02]", async () => {
+    const s = findSetting("VAULT_FOLDER_INBOX");
+    expect(await validateSetting(s, "Inbox\\sub")).not.toBeNull();
+  });
+
+  it("rejects '..' as folder name [SEC-02-03]", async () => {
+    const s = findSetting("VAULT_FOLDER_INBOX");
+    expect(await validateSetting(s, "..")).not.toBeNull();
+  });
+
+  it("rejects '.' as folder name [SEC-02-04]", async () => {
+    const s = findSetting("VAULT_FOLDER_INBOX");
+    expect(await validateSetting(s, ".")).not.toBeNull();
+  });
+
+  it("rejects empty string as folder name [COD-02]", async () => {
+    const s = findSetting("VAULT_FOLDER_INBOX");
+    expect(await validateSetting(s, "")).not.toBeNull();
+    expect(await validateSetting(s, "   ")).not.toBeNull();
+  });
 });
 
 // ── computeChanges ────────────────────────────────────────────────────────────
@@ -312,8 +378,8 @@ describe("showDiff", () => {
 // ── SECTIONS registry ─────────────────────────────────────────────────────────
 
 describe("SECTIONS registry", () => {
-  it("has 9 sections [CFG-60]", () => {
-    expect(SECTIONS).toHaveLength(9);
+  it("has 10 sections [CFG-60]", () => {
+    expect(SECTIONS).toHaveLength(10);
   });
 
   it("every section has a unique id [CFG-61]", () => {
@@ -342,5 +408,22 @@ describe("SECTIONS registry", () => {
   it("all setting keys are unique across sections [CFG-64]", () => {
     const keys = SECTIONS.flatMap((s) => s.settings.map((st) => st.key));
     expect(new Set(keys).size).toBe(keys.length);
+  });
+
+  it("vault-folders section is registered [CFG-65]", () => {
+    const sec = SECTIONS.find((s) => s.id === "vault-folders");
+    expect(sec).toBeDefined();
+  });
+
+  it("vault-folders section has 10 settings [CFG-66]", () => {
+    const sec = SECTIONS.find((s) => s.id === "vault-folders");
+    expect(sec?.settings).toHaveLength(10);
+  });
+
+  it("all vault-folders setting keys start with VAULT_FOLDER_ [CFG-67]", () => {
+    const sec = SECTIONS.find((s) => s.id === "vault-folders");
+    for (const setting of sec?.settings ?? []) {
+      expect(setting.key).toMatch(/^VAULT_FOLDER_/);
+    }
   });
 });

@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { VAULT_FOLDERS } from "../config/folders.js";
 import { VaultRepository } from "../vault/repository.js";
 import { SecondBrainService } from "./service.js";
 
@@ -20,7 +21,7 @@ describe("SecondBrainService.processCapture", () => {
 
   it("writes a classified capture note and appends an audit log", async () => {
     const service = new SecondBrainService(
-      { vaultPath: tmpDir, enableCapturePipeline: true, logRawInput: false },
+      { vaultPath: tmpDir, enableCapturePipeline: true, logRawInput: false, folders: VAULT_FOLDERS },
       vault,
     );
 
@@ -43,7 +44,7 @@ describe("SecondBrainService.processCapture", () => {
 
   it("returns a disabled result without writing a note when capture is off", async () => {
     const service = new SecondBrainService(
-      { vaultPath: tmpDir, enableCapturePipeline: false, logRawInput: false },
+      { vaultPath: tmpDir, enableCapturePipeline: false, logRawInput: false, folders: VAULT_FOLDERS },
       vault,
     );
 
@@ -51,5 +52,48 @@ describe("SecondBrainService.processCapture", () => {
 
     expect(result).toEqual({ ok: false, message: "Capture pipeline is disabled" });
     await expect(fs.readdir(tmpDir)).resolves.toEqual([]);
+  });
+
+  it("routes capture to custom inbox folder when confidence is low [QA-06]", async () => {
+    const customFolders = { ...VAULT_FOLDERS, INBOX: "MyInbox" };
+    const service = new SecondBrainService(
+      { vaultPath: tmpDir, enableCapturePipeline: true, logRawInput: false, folders: customFolders },
+      vault,
+    );
+
+    // Unclassifiable content → low confidence → routed to inbox
+    const result = await service.processCapture("xyzzy quux bloop");
+
+    expect(result.ok).toBe(true);
+    expect(result.notePath).toMatch(/^MyInbox\//);
+  });
+
+  it("routes capture to custom category folder when confidence is high [QA-06]", async () => {
+    const customFolders = { ...VAULT_FOLDERS, PEOPLE: "MyPeople" };
+    const service = new SecondBrainService(
+      { vaultPath: tmpDir, enableCapturePipeline: true, logRawInput: false, folders: customFolders },
+      vault,
+    );
+
+    // "met with" triggers person category (confidence 0.7) → routes to PEOPLE
+    const result = await service.processCapture("met with Alice about the quarterly review");
+
+    expect(result.ok).toBe(true);
+    expect(result.notePath).toMatch(/^MyPeople\//);
+  });
+
+  it("writes audit log to custom AI_LOGS folder [QA-06]", async () => {
+    const customFolders = { ...VAULT_FOLDERS, AI_LOGS: "MyAILogs" };
+    const service = new SecondBrainService(
+      { vaultPath: tmpDir, enableCapturePipeline: true, logRawInput: false, folders: customFolders },
+      vault,
+    );
+
+    const result = await service.processCapture("/capture idea for something");
+
+    expect(result.ok).toBe(true);
+    const logDir = path.join(tmpDir, "MyAILogs", "classifications");
+    const entries = await fs.readdir(logDir);
+    expect(entries.length).toBeGreaterThan(0);
   });
 });

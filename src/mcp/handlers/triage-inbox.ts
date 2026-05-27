@@ -1,3 +1,4 @@
+import type { VaultFolders } from "../../config/folders.js";
 import { triageInbox } from "../../triage/inbox.js";
 import { VaultErrorCode } from "../../utils/errors.js";
 import type { VaultServices } from "../../vault/manager.js";
@@ -12,6 +13,7 @@ export async function handleVaultTriageInbox(
     vault?: string | undefined;
   },
   services: VaultServices,
+  folders: VaultFolders,
 ): Promise<ToolResult> {
   const { vault, vaultSync } = services;
   const autoMoveThreshold = args.auto_move_threshold;
@@ -30,6 +32,7 @@ export async function handleVaultTriageInbox(
     suggestThreshold,
     inboxFolder: args.inbox_folder,
     dryRun: args.dry_run,
+    folders,
   });
   return successResult(result);
 }
