@@ -18,6 +18,7 @@
     "test": "bun test --isolate",
     "test:watch": "bun test --isolate --watch",
     "test:coverage": "bun test --isolate --coverage",
+    "test:clean": "rm -rf node_modules && bun install && bun test --isolate",
     "lint": "biome check .",
     "format": "biome format --write .",
     "check:dead": "knip",
