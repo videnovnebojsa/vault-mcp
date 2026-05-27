@@ -1,6 +1,15 @@
 import matter from "gray-matter";
+import yaml from "js-yaml";
 import { frontmatterSchema } from "./schema.js";
 import type { VaultFrontmatter } from "./types.js";
+
+// gray-matter bundles js-yaml 3.x which uses the removed safeLoad/safeDump API.
+// Pass js-yaml 4.x explicitly as a custom engine so the override in package.json
+// (which pins js-yaml to ^4.1.1 for CVE hygiene) doesn't break parsing.
+const yamlEngine = {
+  parse: (src: string) => yaml.load(src) as Record<string, unknown>,
+  stringify: (obj: unknown) => yaml.dump(obj),
+};
 
 export interface ParsedNote {
   content: string;
@@ -14,7 +23,7 @@ export interface ValidationResult {
 }
 
 export function parseFrontmatter(raw: string): ParsedNote {
-  const { content, data } = matter(raw);
+  const { content, data } = matter(raw, { engines: { yaml: yamlEngine } });
   return {
     content,
     frontmatter: data as VaultFrontmatter,
@@ -27,7 +36,7 @@ export function serializeNote(content: string, frontmatter: VaultFrontmatter): s
   if (!hasFields) {
     return content;
   }
-  return matter.stringify(content, frontmatter);
+  return matter.stringify(content, frontmatter, { engines: { yaml: yamlEngine } });
 }
 
 export function validateFrontmatter(fm: unknown, opts?: { requireType?: boolean }): ValidationResult {
