@@ -241,7 +241,6 @@ ok "Config written to ${CFG_FILE}"
 header "Background service"
 
 INSTALLED_BIN="${BIN_DIR}/${BIN_NAME}"
-SERVICE_RUNNING=false
 
 if [ "$OS" = "Darwin" ]; then
   PLIST_DIR="${HOME}/Library/LaunchAgents"
@@ -255,7 +254,6 @@ if [ "$OS" = "Darwin" ]; then
     launchctl kickstart -k "gui/$(id -u)/com.vault-mcp" 2>/dev/null \
       || { launchctl unload "$PLIST_FILE" 2>/dev/null; launchctl load "$PLIST_FILE"; }
     ok "Service restarted with new config"
-    SERVICE_RUNNING=true
   else
     ask "Install as a background service (auto-starts at login)? [Y/n]: "
     read -r INSTALL_SERVICE
@@ -292,7 +290,6 @@ PLIST
       ok "Service installed and started (launchd)"
       printf "  Logs: ${CYAN}tail -f %s/vault-mcp.err${RESET}\n" "$LOG_DIR"
       printf "  Restart: ${CYAN}launchctl kickstart -k gui/\$(id -u)/com.vault-mcp${RESET}\n"
-      SERVICE_RUNNING=true
     else
       info "Service install skipped. Start manually: ${CYAN}vault-mcp${RESET}"
     fi
@@ -308,7 +305,6 @@ elif [ "$OS" = "Linux" ]; then
     systemctl --user daemon-reload
     systemctl --user restart vault-mcp
     ok "Service restarted with new config"
-    SERVICE_RUNNING=true
   else
     ask "Install as a background service (auto-starts at login)? [Y/n]: "
     read -r INSTALL_SERVICE
@@ -335,7 +331,6 @@ SYSTEMD
       ok "Service installed and started (systemd)"
       printf "  Logs: ${CYAN}journalctl --user -u vault-mcp -f${RESET}\n"
       printf "  Restart: ${CYAN}systemctl --user restart vault-mcp${RESET}\n"
-      SERVICE_RUNNING=true
     else
       info "Service install skipped. Start manually: ${CYAN}vault-mcp${RESET}"
     fi

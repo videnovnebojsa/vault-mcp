@@ -29,7 +29,7 @@ $VER_FILE   = Join-Path $CFG_DIR ".installed-version"
 function Write-Step  { Write-Host "→ $args" -ForegroundColor Cyan }
 function Write-Ok    { Write-Host "✔ $args" -ForegroundColor Green }
 function Write-Warn  { Write-Host "⚠ $args" -ForegroundColor Yellow }
-function Write-Err   { Write-Host "✘ Error: $args" -ForegroundColor Red; exit 1 }
+function Write-Err   { Write-Host "✘ Error: $args" -ForegroundColor Red; throw "install failed: $args" }
 
 function Get-CfgValue([string]$Key) {
     if (-not (Test-Path $CFG_FILE)) { return "" }
