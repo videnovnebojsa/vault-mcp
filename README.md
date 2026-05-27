@@ -94,17 +94,27 @@ curl http://localhost:3782/health
 
 ## Configuration
 
-All settings live in `~/.config/vault-mcp/.env`, including manual installs. The setup script writes this file with your answers and leaves every optional variable commented out with its default; if you install manually, start from [.env.example](.env.example) and write the final file to `~/.config/vault-mcp/.env`.
+All settings live in `~/.config/vault-mcp/.env`. The setup script writes this file with your answers and leaves every optional variable commented out with its default; if you install manually, start from [.env.example](.env.example).
 
-To apply changes after editing:
+To update settings interactively after installation, run:
+
+```bash
+bun run configure
+```
+
+This opens a section menu, prompts for each setting with validation, shows a diff of what will change, and optionally restarts the service. Jump straight to a section with `--section <id>`:
+
+```bash
+bun run configure -- --section embeddings
+```
+
+To edit the file manually instead, open `~/.config/vault-mcp/.env` and restart the service when done:
 
 | Platform | Command |
 |---|---|
 | macOS | `launchctl kickstart -k gui/$UID/com.vault-mcp` |
 | Linux | `systemctl --user restart vault-mcp` |
 | Windows | `schtasks /End /TN vault-mcp && schtasks /Run /TN vault-mcp` |
-
-Re-running `bun run setup` offers an **Update config** option that rewrites the file and restarts the service without reinstalling.
 
 ## Development
 
