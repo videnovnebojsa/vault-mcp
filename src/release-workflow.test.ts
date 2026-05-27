@@ -69,7 +69,7 @@ describe("review documentation regressions", () => {
   });
 
   it("keeps Claude guidance aligned with --alias removal [ARCH-07]", () => {
-    const claude = fs.readFileSync(path.join(process.cwd(), "CLAUDE.md"), "utf8");
+    const claude = fs.readFileSync(path.join(process.cwd(), ".claude/rules/architecture.md"), "utf8");
 
     expect(claude).toContain("--alias");
     expect(claude).toContain("not supported");
