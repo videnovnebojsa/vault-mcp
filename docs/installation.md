@@ -72,7 +72,7 @@ bun run setup
 | Port | `3782` | Checked for conflicts before accepting |
 | API key | _(empty)_ | Leave empty for local-only use |
 | Add a second vault? | N | Repeatable; each vault needs a name and path |
-| Enable embeddings? | N | Requires an OpenAI-compatible endpoint and API key |
+| Enable embeddings? | N | Requires an OpenAI-compatible endpoint and API key. See [Semantic & Hybrid Search](semantic-search.md) for post-install steps. |
 
 Everything else (backup, watcher, logging, capture pipeline, access control, etc.) uses its default and is written as a commented-out line in the config file — edit to tune.
 

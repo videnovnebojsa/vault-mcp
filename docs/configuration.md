@@ -23,7 +23,7 @@ All configuration is via environment variables. Zero required configuration — 
 
 ## Vector Embeddings
 
-Requires an OpenAI-compatible embedding endpoint.
+Requires an OpenAI-compatible embedding endpoint. See [Semantic & Hybrid Search](semantic-search.md) for setup steps, provider recommendations, and `HYBRID_ALPHA` tuning guidance.
 
 | Variable | Default | Description |
 |---|---|---|

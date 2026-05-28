@@ -205,11 +205,13 @@ Search notes by content or filename. Supports three modes:
 
 The hybrid blend is controlled by `HYBRID_ALPHA` (0 = pure semantic, 1 = pure keyword, default 0.5).
 
+If `mode` is omitted and embeddings are disabled, search automatically uses `"keyword"` — no error. Explicitly passing `mode: "semantic"` or `mode: "hybrid"` when embeddings are not enabled returns a `MODE_UNAVAILABLE` error. See [Semantic & Hybrid Search](semantic-search.md) for setup.
+
 ---
 
 ### `vault_find_connections`
 
-Find semantically similar notes that don't already link to each other. Useful for discovering implicit relationships. Requires `ENABLE_EMBEDDINGS=true`.
+Find semantically similar notes that don't already link to each other. Useful for discovering implicit relationships. Requires `ENABLE_EMBEDDINGS=true` — see [Semantic & Hybrid Search](semantic-search.md) for setup.
 
 **Single-note mode** — find notes similar to one specific note:
 
@@ -327,6 +329,8 @@ Batch-embed notes that are missing or have stale embeddings. Requires `ENABLE_EM
 | `vault` | string | no | Target vault name |
 
 Call repeatedly until `result.remaining === 0`.
+
+The file watcher keeps the FTS index current but does **not** generate embeddings for new or changed notes. Run `vault_embed_backlog` periodically to keep embedding coverage up to date.
 
 ---
 
