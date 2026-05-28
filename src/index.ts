@@ -37,12 +37,7 @@ process.on("SIGTERM", shutdown);
 process.on("unhandledRejection", (reason) => {
   const stack = reason instanceof Error ? (reason.stack ?? reason.message) : String(reason);
   logger.error("index", "unhandledRejection", { stack });
-  shutdown().catch((err) => {
-    logger.error("index", "shutdown failed after unhandledRejection", {
-      stack: err instanceof Error ? (err.stack ?? err.message) : String(err),
-    });
-    process.exit(1);
-  });
+  void shutdown();
 });
 
 process.on("uncaughtException", (err) => {

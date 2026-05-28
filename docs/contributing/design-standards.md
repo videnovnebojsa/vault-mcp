@@ -646,3 +646,4 @@ logger.warn("alert", "webhook failed", { url: maskedUrl });
 | 2026-05-12 | Added `confirm: true` gate on permanent delete | Destructive ops had no protection; LLM agents could accidentally delete notes |
 | 2026-05-12 | Made `vault_search` return `MODE_UNAVAILABLE` error | Silent fallback to keyword when semantic was requested confused agents about search quality |
 | 2026-05-12 | Standard 3-shape response envelope | 5+ different response shapes meant agents had to parse each tool differently |
+| 2026-05-28 | Removed sessions field from /health | sessions count meaningless in stateless mode |

@@ -1,16 +1,10 @@
-<p align="center">
-  <img src="assets/logo.png" alt="vault-mcp logo" width="160" />
-</p>
+# vault-mcp
 
-<h1 align="center">vault-mcp</h1>
+[![CI](https://github.com/videnovnebojsa/vault-mcp/actions/workflows/ci.yml/badge.svg)](https://github.com/videnovnebojsa/vault-mcp/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![Bun ≥ 1.3](https://img.shields.io/badge/bun-%E2%89%A51.3-black?logo=bun&logoColor=white)](https://bun.sh)
 
-<p align="center">
-  <a href="https://github.com/videnovnebojsa/vault-mcp/actions/workflows/ci.yml"><img src="https://github.com/videnovnebojsa/vault-mcp/actions/workflows/ci.yml/badge.svg" alt="CI" /></a>
-  <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-yellow.svg" alt="License: MIT" /></a>
-  <a href="https://bun.sh"><img src="https://img.shields.io/badge/bun-%E2%89%A51.3-black?logo=bun&logoColor=white" alt="Bun ≥ 1.3" /></a>
-</p>
-
-<p align="center">MCP server that gives your agent direct, always-on access to your Obsidian vault — no plugin, no Obsidian process required.</p>
+MCP server that gives your agent direct, always-on access to your Obsidian vault — no plugin, no Obsidian process required.
 
 ## Why vault-mcp?
 
@@ -47,23 +41,6 @@
 - Automatic SQLite backup with configurable retention
 - OpenTelemetry spans per tool call; webhook alert notifications
 - `/health` and `/ready` endpoints for service probes
-
-## Example Prompts
-
-Tell your agent what you need — vault-mcp picks the right tool automatically:
-
-- "Search my vault for notes on distributed tracing"
-- "Capture this idea: use SQLite WAL mode for concurrent readers"
-- "Open today's daily note"
-- "Find notes similar to Projects/architecture-rfc but not linked to it"
-- "Show me the Decision section of Projects/db-schema"
-- "Triage my inbox — auto-move anything above 80% confidence"
-- "What tags do I use most in my vault?"
-- "Rebuild the search index"
-
-See [docs/prompts.md](docs/prompts.md) for the full prompt guide covering all 18 tools.
-
----
 
 ## Quick Start
 

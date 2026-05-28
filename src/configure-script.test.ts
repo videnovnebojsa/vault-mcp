@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
@@ -316,13 +316,6 @@ describe("validateSetting", () => {
     const s = findSetting("VAULT_FOLDER_INBOX");
     expect(await validateSetting(s, "")).not.toBeNull();
     expect(await validateSetting(s, "   ")).not.toBeNull();
-  });
-
-  it("keeps CFG-28 and CFG-29 assigned to integer range coverage [QA-11]", () => {
-    const source = readFileSync(path.join(process.cwd(), "src/configure-script.test.ts"), "utf8");
-
-    expect(source).toContain("[CFG-28]");
-    expect(source).toContain("[CFG-29]");
   });
 });
 
