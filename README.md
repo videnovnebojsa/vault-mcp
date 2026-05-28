@@ -1,10 +1,16 @@
-# vault-mcp
+<p align="center">
+  <img src="assets/logo.png" alt="vault-mcp logo" width="160" />
+</p>
 
-[![CI](https://github.com/videnovnebojsa/vault-mcp/actions/workflows/ci.yml/badge.svg)](https://github.com/videnovnebojsa/vault-mcp/actions/workflows/ci.yml)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
-[![Bun ≥ 1.3](https://img.shields.io/badge/bun-%E2%89%A51.3-black?logo=bun&logoColor=white)](https://bun.sh)
+<h1 align="center">vault-mcp</h1>
 
-MCP server that gives your agent direct, always-on access to your Obsidian vault — no plugin, no Obsidian process required.
+<p align="center">
+  <a href="https://github.com/videnovnebojsa/vault-mcp/actions/workflows/ci.yml"><img src="https://github.com/videnovnebojsa/vault-mcp/actions/workflows/ci.yml/badge.svg" alt="CI" /></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-yellow.svg" alt="License: MIT" /></a>
+  <a href="https://bun.sh"><img src="https://img.shields.io/badge/bun-%E2%89%A51.3-black?logo=bun&logoColor=white" alt="Bun ≥ 1.3" /></a>
+</p>
+
+<p align="center">MCP server that gives your agent direct, always-on access to your Obsidian vault — no plugin, no Obsidian process required.</p>
 
 ## Why vault-mcp?
 
