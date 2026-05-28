@@ -241,6 +241,18 @@ describe("VaultSearchStore", () => {
     expect(page.items[0]?.tag).toBeTruthy();
   });
 
+  it("listTags does not use MAX_SAFE_INTEGER as the SQL page limit [PERF-07]", () => {
+    const listTagsPageSpy = spyOn(store, "listTagsPage");
+    store.upsert("a.md", "content", "h1", "a", { tags: ["alpha", "beta"] });
+    store.upsert("b.md", "content", "h2", "b", { tags: ["alpha", "gamma"] });
+
+    const tags = store.listTags();
+
+    expect(tags.map((t) => t.tag)).toContain("alpha");
+    expect(listTagsPageSpy.mock.calls[0]?.[0]).not.toBe(Number.MAX_SAFE_INTEGER);
+    listTagsPageSpy.mockRestore();
+  });
+
   it("bounds dynamic statement cache size", () => {
     store.upsert("a.md", "content", "h1", "a", {});
 

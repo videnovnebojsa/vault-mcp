@@ -1,7 +1,7 @@
 import { VaultError, VaultErrorCode } from "../../utils/errors.js";
 import { logger } from "../../utils/logger.js";
 import type { SyncTracker, VaultServices } from "../../vault/manager.js";
-import { successResult, type ToolResult } from "../format.js";
+import { successResult, type ToolResult, toClientNote } from "../format.js";
 
 export async function handleVaultUpdateProperties(
   args: { path: string; properties: Record<string, unknown>; vault?: string | undefined },
@@ -22,5 +22,5 @@ export async function handleVaultUpdateProperties(
       ),
     );
   }
-  return successResult(result);
+  return successResult(result.note ? { ...result, note: toClientNote(result.note) } : result);
 }

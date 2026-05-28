@@ -5,6 +5,8 @@
 #   curl -fsSL https://raw.githubusercontent.com/videnovnebojsa/vault-mcp/main/install.sh | sh
 #   bash install.sh               # install or upgrade
 #   bash install.sh --configure   # reconfigure only (skip binary download)
+#   bash install.sh --local-bin=<path>  # stage a locally built binary (skip download)
+#   bash install.sh --no-service  # skip background service prompt (useful for CI)
 #
 # Requires: curl or wget, bash 3.2+
 # Supported: macOS (arm64, x86_64), Linux (x86_64)
@@ -34,6 +36,14 @@ warn()    { printf "${YELLOW}⚠${RESET} %s\n" "$*"; }
 die()     { printf "${RED}✘ Error:${RESET} %s\n" "$*" >&2; exit 1; }
 header()  { printf "\n${BOLD}%s${RESET}\n%s\n" "$1" "$(printf '─%.0s' $(seq 1 ${#1}))"; }
 ask()     { printf "${BOLD}%s${RESET}" "$*"; }  # no newline — caller uses read
+env_quote() {
+  local value="$1"
+  value="${value//\\/\\\\}"
+  value="${value//\"/\\\"}"
+  value="${value//\$/\\$}"
+  value="${value//\`/\\\`}"
+  printf '"%s"' "$value"
+}
 
 # Read a value from the existing .env (returns empty string if not found)
 cfg_get() {
@@ -45,13 +55,20 @@ cfg_get() {
 # ─── Flags ────────────────────────────────────────────────────────────────────
 
 CONFIGURE_ONLY=false
+LOCAL_BIN=""
+NO_SERVICE=false
+
 for arg in "$@"; do
   case "$arg" in
-    --configure) CONFIGURE_ONLY=true ;;
+    --configure)   CONFIGURE_ONLY=true ;;
+    --no-service)  NO_SERVICE=true ;;
+    --local-bin=*) LOCAL_BIN="${arg#--local-bin=}" ;;
     --help|-h)
-      printf "Usage: bash install.sh [--configure]\n\n"
-      printf "  (no flags)    Install or upgrade vault-mcp binary + configure\n"
-      printf "  --configure   Reconfigure only — skip binary download/upgrade\n"
+      printf "Usage: bash install.sh [OPTIONS]\n\n"
+      printf "  (no flags)           Install or upgrade vault-mcp binary + configure\n"
+      printf "  --configure          Reconfigure only — skip binary download/upgrade\n"
+      printf "  --local-bin=<path>   Stage a locally built binary instead of downloading\n"
+      printf "  --no-service         Skip background service installation prompt\n"
       exit 0 ;;
     *) die "Unknown flag: $arg" ;;
   esac
@@ -68,71 +85,88 @@ OS="$(uname -s)"
 ARCH="$(uname -m)"
 
 if [ "$CONFIGURE_ONLY" = false ]; then
-  case "${OS}-${ARCH}" in
-    Darwin-arm64)  ARTIFACT="vault-mcp-macos-arm64" ;;
-    Darwin-x86_64) ARTIFACT="vault-mcp-macos-x64"   ;;
-    Linux-x86_64)  ARTIFACT="vault-mcp-linux-x64"    ;;
-    Linux-aarch64) die "Linux arm64 is not yet supported via this script. Build from source: https://github.com/${REPO}#developer-install" ;;
-    *) die "Unsupported platform: ${OS}-${ARCH}" ;;
-  esac
-
-  # ─── Step 2: Resolve fetch command ──────────────────────────────────────────
-
-  if command -v curl &>/dev/null; then
-    fetch() { curl -fsSL "$1"; }
-    fetch_to() { curl -fsSL "$1" -o "$2"; }
-  elif command -v wget &>/dev/null; then
-    fetch() { wget -qO- "$1"; }
-    fetch_to() { wget -qO "$2" "$1"; }
-  else
-    die "curl or wget is required but neither was found"
-  fi
-
-  # ─── Step 2a: Redirect stdin from /dev/tty when piped (e.g. curl | sh) ──────
-  # Without this, all `read` prompts return immediately with empty string.
-  if [ ! -t 0 ]; then
-    if [ -e /dev/tty ]; then
-      exec < /dev/tty
-    else
-      die "No interactive terminal available. Download and run the script directly:\n  bash <(curl -fsSL https://raw.githubusercontent.com/${REPO}/main/install.sh)"
-    fi
-  fi
-
-  # ─── Step 3: Get latest release tag ─────────────────────────────────────────
-
-  info "Checking latest release..."
-  LATEST_TAG=$(fetch "https://api.github.com/repos/${REPO}/releases/latest" \
-    | grep '"tag_name"' | head -1 | cut -d'"' -f4)
-  [ -n "$LATEST_TAG" ] || die "Could not fetch latest release tag — check your internet connection"
-  [[ "$LATEST_TAG" =~ ^v[0-9]+\.[0-9]+ ]] \
-    || die "Unexpected release tag format: '${LATEST_TAG}' — GitHub API may be rate-limiting"
-  info "Latest release: ${LATEST_TAG}"
-
-  # ─── Step 4: Download binary (skip if already on this version) ──────────────
-
   INSTALLED_BIN="${BIN_DIR}/${BIN_NAME}"
-  INSTALLED_TAG="$(cat "${VER_FILE}" 2>/dev/null || true)"
 
-  if [ -x "$INSTALLED_BIN" ] && [ "$INSTALLED_TAG" = "$LATEST_TAG" ]; then
-    ok "Already on ${LATEST_TAG} — skipping download"
+  if [ -n "$LOCAL_BIN" ]; then
+    # ─── Local binary mode (--local-bin=<path>) ─────────────────────────────
+    # Used by CI and local dev builds — skips GitHub download entirely.
+    [ -f "$LOCAL_BIN" ] || die "Local binary not found: ${LOCAL_BIN}"
+    mkdir -p "$BIN_DIR" "$CFG_DIR"
+    cp "$LOCAL_BIN" "${INSTALLED_BIN}.tmp"
+    chmod +x "${INSTALLED_BIN}.tmp"
+    mv "${INSTALLED_BIN}.tmp" "${INSTALLED_BIN}"
+    LATEST_TAG="local"
+    printf '%s' "$LATEST_TAG" > "$VER_FILE"
+    ok "Binary staged from ${LOCAL_BIN} → ${INSTALLED_BIN}"
+
   else
-    if [ -n "$INSTALLED_TAG" ]; then
-      info "Upgrading ${INSTALLED_TAG} → ${LATEST_TAG}..."
+    # ─── Step 1: Detect platform ──────────────────────────────────────────────
+    case "${OS}-${ARCH}" in
+      Darwin-arm64)  ARTIFACT="vault-mcp-macos-arm64" ;;
+      Darwin-x86_64) ARTIFACT="vault-mcp-macos-x64"   ;;
+      Linux-x86_64)  ARTIFACT="vault-mcp-linux-x64"    ;;
+      Linux-aarch64) die "Linux arm64 is not yet supported via this script. Build from source: https://github.com/${REPO}#developer-install" ;;
+      *) die "Unsupported platform: ${OS}-${ARCH}" ;;
+    esac
+
+    # ─── Step 2: Resolve fetch command ────────────────────────────────────────
+    if command -v curl &>/dev/null; then
+      fetch() { curl -fsSL "$1"; }
+      fetch_to() { curl -fsSL "$1" -o "$2"; }
+    elif command -v wget &>/dev/null; then
+      fetch() { wget -qO- "$1"; }
+      fetch_to() { wget -qO "$2" "$1"; }
     else
-      info "Downloading ${ARTIFACT}..."
+      die "curl or wget is required but neither was found"
     fi
 
-    mkdir -p "$BIN_DIR"
-    DOWNLOAD_URL="https://github.com/${REPO}/releases/download/${LATEST_TAG}/${ARTIFACT}"
-    TMP_BIN="${INSTALLED_BIN}.tmp"
-    fetch_to "${DOWNLOAD_URL}" "${TMP_BIN}" \
-      || { rm -f "${TMP_BIN}"; die "Download failed from ${DOWNLOAD_URL}"; }
-    chmod +x "${TMP_BIN}"
-    mv "${TMP_BIN}" "${INSTALLED_BIN}"
-    mkdir -p "$CFG_DIR"
-    printf '%s' "$LATEST_TAG" > "$VER_FILE"
-    ok "Binary installed: ${INSTALLED_BIN} (${LATEST_TAG})"
+    # ─── Step 2a: Redirect stdin from /dev/tty when piped (e.g. curl | sh) ────
+    # Without this, all `read` prompts return immediately with empty string.
+    if [ ! -t 0 ]; then
+      if [ -e /dev/tty ]; then
+        exec < /dev/tty
+      else
+        die "No interactive terminal available. Download and run the script directly:\n  bash <(curl -fsSL https://raw.githubusercontent.com/${REPO}/main/install.sh)"
+      fi
+    fi
+
+    # ─── Step 3: Get latest release tag ───────────────────────────────────────
+    info "Checking latest release..."
+    LATEST_TAG=$(fetch "https://api.github.com/repos/${REPO}/releases/latest" \
+      | grep '"tag_name"' | head -1 | cut -d'"' -f4)
+    [ -n "$LATEST_TAG" ] || die "Could not fetch latest release tag — check your internet connection"
+    [[ "$LATEST_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] \
+      || die "Unexpected release tag format: '${LATEST_TAG}' — GitHub API may be rate-limiting"
+    info "Latest release: ${LATEST_TAG}"
+
+    # ─── Step 4: Download binary (skip if already on this version) ────────────
+    INSTALLED_TAG="$(cat "${VER_FILE}" 2>/dev/null || true)"
+
+    if [ -x "$INSTALLED_BIN" ] && [ "$INSTALLED_TAG" = "$LATEST_TAG" ]; then
+      ok "Already on ${LATEST_TAG} — skipping download"
+    else
+      if [ "$INSTALLED_TAG" = "local" ]; then
+        info "Replacing local build with ${LATEST_TAG}..."
+      elif [ -n "$INSTALLED_TAG" ]; then
+        info "Upgrading ${INSTALLED_TAG} → ${LATEST_TAG}..."
+      else
+        info "Downloading ${ARTIFACT}..."
+      fi
+
+      mkdir -p "$BIN_DIR"
+      DOWNLOAD_URL="https://github.com/${REPO}/releases/download/${LATEST_TAG}/${ARTIFACT}"
+      TMP_BIN="${INSTALLED_BIN}.tmp"
+      fetch_to "${DOWNLOAD_URL}" "${TMP_BIN}" \
+        || { rm -f "${TMP_BIN}"; die "Download failed from ${DOWNLOAD_URL}"; }
+      chmod +x "${TMP_BIN}"
+      mv "${TMP_BIN}" "${INSTALLED_BIN}"
+      mkdir -p "$CFG_DIR"
+      printf '%s' "$LATEST_TAG" > "$VER_FILE"
+      ok "Binary installed: ${INSTALLED_BIN} (${LATEST_TAG})"
+    fi
   fi
+else
+  LATEST_TAG="$(cat "${VER_FILE}" 2>/dev/null || true)"
 fi
 
 # ─── Step 5: Configuration ────────────────────────────────────────────────────
@@ -224,12 +258,12 @@ CFG_TMP="${CFG_FILE}.tmp"
   printf "# Full config reference: https://github.com/%s/blob/main/docs/configuration.md\n" "$REPO"
   printf "# Interactive editor (requires Bun): bun run configure\n"
   printf "\n"
-  printf 'OBSIDIAN_VAULT_PATH="%s"\n' "$VAULT_PATH"
+  printf 'OBSIDIAN_VAULT_PATH=%s\n' "$(env_quote "$VAULT_PATH")"
   printf "MCP_PORT=%s\n" "$MCP_PORT"
-  [ -n "$MCP_API_KEY" ]         && printf 'MCP_API_KEY="%s"\n'         "$MCP_API_KEY"
+  [ -n "$MCP_API_KEY" ]         && printf 'MCP_API_KEY=%s\n'         "$(env_quote "$MCP_API_KEY")"
   printf "ENABLE_EMBEDDINGS=%s\n" "$ENABLE_EMBEDDINGS"
-  [ -n "$EMBEDDINGS_ENDPOINT" ] && printf 'EMBEDDING_ENDPOINT="%s"\n'  "$EMBEDDINGS_ENDPOINT"
-  [ -n "$EMBEDDINGS_API_KEY" ]  && printf 'EMBEDDING_API_KEY="%s"\n'   "$EMBEDDINGS_API_KEY"
+  [ -n "$EMBEDDINGS_ENDPOINT" ] && printf 'EMBEDDING_ENDPOINT=%s\n'  "$(env_quote "$EMBEDDINGS_ENDPOINT")"
+  [ -n "$EMBEDDINGS_API_KEY" ]  && printf 'EMBEDDING_API_KEY=%s\n'   "$(env_quote "$EMBEDDINGS_API_KEY")"
 } > "$CFG_TMP"
 chmod 600 "$CFG_TMP"
 mv "$CFG_TMP" "$CFG_FILE"
@@ -238,9 +272,13 @@ ok "Config written to ${CFG_FILE}"
 
 # ─── Step 6: Service install / restart ────────────────────────────────────────
 
-header "Background service"
-
 INSTALLED_BIN="${BIN_DIR}/${BIN_NAME}"
+
+if [ "$NO_SERVICE" = true ]; then
+  info "Service install skipped (--no-service)"
+elif [ "$OS" = "Darwin" ] || [ "$OS" = "Linux" ]; then
+
+header "Background service"
 
 if [ "$OS" = "Darwin" ]; then
   PLIST_DIR="${HOME}/Library/LaunchAgents"
@@ -335,7 +373,13 @@ SYSTEMD
       info "Service install skipped. Start manually: ${CYAN}vault-mcp${RESET}"
     fi
   fi
-fi
+fi  # end OS=Linux
+
+else
+  warn "Background service setup is not supported on ${OS}-${ARCH}"
+  info "Start manually: ${CYAN}vault-mcp${RESET}"
+
+fi  # end NO_SERVICE check
 
 # ─── Step 7: PATH reminder ────────────────────────────────────────────────────
 

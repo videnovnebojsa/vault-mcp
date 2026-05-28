@@ -118,9 +118,10 @@ export async function handleVaultSearch(args: VaultSearchArgs, services: VaultSe
           };
         });
         if (vectorResults.length < searchLimit || searchLimit >= embeddingStore.size) {
+          const visibleVectors = applyAclFilter(vectorResults, aclConfig, aclActive);
           return listResult(applyAclFilter(mappedPage, aclConfig, aclActive), {
             kind: "knownTotal",
-            total: vectorResults.length,
+            total: visibleVectors.length,
             offset,
             limit: effectiveLimit,
           });

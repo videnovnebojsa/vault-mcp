@@ -63,7 +63,9 @@ export function createVaultWatcher(opts: VaultWatcherOptions): VaultWatcher {
     const canonical = toCanonical(absPath);
 
     // Check for pending unlink → treat as rename
-    for (const [oldCanonical, timer] of pendingUnlinks) {
+    const pending = pendingUnlinks.entries().next().value;
+    if (pending) {
+      const [oldCanonical, timer] = pending;
       clearTimeout(timer);
       pendingUnlinks.delete(oldCanonical);
       clearTimer(canonical);

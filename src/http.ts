@@ -70,6 +70,27 @@ export async function handleExistingSessionRequest(
   }
 }
 
+export async function handleNewSessionTransportError(
+  sessionId: string | undefined,
+  sessions: Map<string, unknown>,
+  server: Pick<McpServer, "close">,
+  res: ServerResponse & { status(code: number): ServerResponse & { json(body: unknown): void } },
+  err: unknown,
+): Promise<void> {
+  if (sessionId) sessions.delete(sessionId);
+  httpLogger.error("new session transport error", {
+    err: err instanceof Error ? err.message : String(err),
+  });
+  await server.close().catch((closeErr: unknown) => {
+    httpLogger.warn("session close failed after transport error", {
+      err: closeErr instanceof Error ? closeErr.message : String(closeErr),
+    });
+  });
+  if (!res.headersSent) {
+    res.status(500).json({ error: "Internal server error" });
+  }
+}
+
 export async function closeActiveSessionsForShutdown(sessions: Map<string, ShutdownSessionEntry>): Promise<void> {
   for (const [sid, entry] of sessions) {
     try {
@@ -267,13 +288,7 @@ export async function startHttpServer(boot: BootstrapResult, opts: HttpServerOpt
             await server.close();
           }
         } catch (err) {
-          if (transport.sessionId) sessions.delete(transport.sessionId);
-          await server.close().catch((closeErr: unknown) => {
-            httpLogger.warn("session close failed after transport error", {
-              err: closeErr instanceof Error ? closeErr.message : String(closeErr),
-            });
-          });
-          throw err;
+          await handleNewSessionTransportError(transport.sessionId, sessions, server, res, err);
         }
         return;
       }

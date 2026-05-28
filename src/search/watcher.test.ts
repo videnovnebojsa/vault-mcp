@@ -256,4 +256,11 @@ describe("VaultWatcher", () => {
     expect(mockSync.handleDelete).not.toHaveBeenCalled();
     expect(watcher.stats.eventsProcessed).toBeGreaterThanOrEqual(1);
   });
+
+  it("does not scan all pending unlinks for every add/change [PERF-04]", async () => {
+    const source = await fs.readFile(path.join(process.cwd(), "src/search/watcher.ts"), "utf8");
+
+    expect(source).not.toContain("for (const [oldCanonical, timer] of pendingUnlinks)");
+    expect(source).toContain("pendingUnlinks.entries().next()");
+  });
 });

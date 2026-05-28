@@ -12,6 +12,7 @@ import type { VaultConfig } from "./config.js";
 import {
   closeActiveSessionsForShutdown,
   handleExistingSessionRequest,
+  handleNewSessionTransportError,
   parsePositiveIntEnv,
   startHttpServer,
 } from "./http.js";
@@ -710,6 +711,29 @@ describe("handleExistingSessionRequest", () => {
       {},
     );
 
+    expect(status).toHaveBeenCalledWith(500);
+    expect(json).toHaveBeenCalledWith({ error: "Internal server error" });
+  });
+});
+
+describe("handleNewSessionTransportError", () => {
+  it("returns JSON 500 instead of rethrowing to Express [ERR-07]", async () => {
+    const sessions = new Map<string, unknown>([["session-1", {}]]);
+    const close = mock().mockResolvedValue(undefined);
+    const json = mock();
+    const status = mock().mockReturnValue({ json });
+    const res = { status, headersSent: false };
+
+    await handleNewSessionTransportError(
+      "session-1",
+      sessions,
+      { close },
+      res as unknown as Parameters<typeof handleNewSessionTransportError>[3],
+      new Error("transport failed"),
+    );
+
+    expect(sessions.has("session-1")).toBe(false);
+    expect(close).toHaveBeenCalled();
     expect(status).toHaveBeenCalledWith(500);
     expect(json).toHaveBeenCalledWith({ error: "Internal server error" });
   });

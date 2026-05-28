@@ -221,6 +221,69 @@ describe("VaultRepository", () => {
       expect(page.items.map((item) => item.path)).toEqual(["paged/a/deep.md"]);
     });
 
+    it("reads note summaries in a page concurrently [PERF-01]", async () => {
+      await repo.writeNote("parallel/a", { content: "A" });
+      await repo.writeNote("parallel/b", { content: "B" });
+      await repo.writeNote("parallel/c", { content: "C" });
+
+      const realReadFile = fs.readFile;
+      let activeReads = 0;
+      let maxActiveReads = 0;
+      const readFileSpy = spyOn(fs, "readFile").mockImplementation(async (...args: Parameters<typeof fs.readFile>) => {
+        const target = String(args[0]);
+        if (!target.includes(`${path.sep}parallel${path.sep}`) || !target.endsWith(".md")) {
+          return realReadFile(...args);
+        }
+        activeReads++;
+        maxActiveReads = Math.max(maxActiveReads, activeReads);
+        await Bun.sleep(20);
+        try {
+          return await realReadFile(...args);
+        } finally {
+          activeReads--;
+        }
+      });
+
+      try {
+        await repo.listFolderPage("parallel", { limit: 3 });
+      } finally {
+        readFileSpy.mockRestore();
+      }
+
+      expect(maxActiveReads).toBeGreaterThan(1);
+    });
+
+    it("recurses into subdirectories concurrently [PERF-02]", async () => {
+      await repo.writeNote("recursive/a/one", { content: "A" });
+      await repo.writeNote("recursive/b/two", { content: "B" });
+
+      const realReadDir = fs.readdir;
+      let activeNestedReads = 0;
+      let maxActiveNestedReads = 0;
+      const readDirSpy = spyOn(fs, "readdir").mockImplementation(async (...args: Parameters<typeof fs.readdir>) => {
+        const target = String(args[0]);
+        const isNested = target.includes(`${path.sep}recursive${path.sep}`);
+        if (isNested) {
+          activeNestedReads++;
+          maxActiveNestedReads = Math.max(maxActiveNestedReads, activeNestedReads);
+          await Bun.sleep(20);
+        }
+        try {
+          return await realReadDir(...args);
+        } finally {
+          if (isNested) activeNestedReads--;
+        }
+      });
+
+      try {
+        await repo.listFolderPage("recursive", { recursive: true });
+      } finally {
+        readDirSpy.mockRestore();
+      }
+
+      expect(maxActiveNestedReads).toBeGreaterThan(1);
+    });
+
     it("propagates ACL violations encountered during recursive listing", async () => {
       await repo.writeNote("visible/note", { content: "Visible" });
       await repo.writeNote("visible/private/secret", { content: "Secret" });

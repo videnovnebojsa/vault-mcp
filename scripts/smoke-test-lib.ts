@@ -7,16 +7,20 @@ export async function assertOkResponse(res: Response, label: string): Promise<vo
 
 export type ToolsListResponse = { result?: { tools?: unknown[] } };
 
-export function parseToolsListResponse(body: string): ToolsListResponse {
+export function parseSseResponse(body: string, label: string): unknown {
   const dataLine = body.split("\n").find((line) => line.startsWith("data:"));
   if (!dataLine) return {};
 
   try {
-    return JSON.parse(dataLine.slice(5).trim()) as ToolsListResponse;
+    return JSON.parse(dataLine.slice(5).trim()) as unknown;
   } catch (err) {
     const detail = err instanceof Error ? err.message : String(err);
-    throw new Error(`FAIL: tools/list returned malformed SSE JSON: ${detail}`);
+    throw new Error(`FAIL: ${label} returned malformed SSE JSON: ${detail}\nRaw response:\n${body}`);
   }
+}
+
+export function parseToolsListResponse(body: string): ToolsListResponse {
+  return parseSseResponse(body, "tools/list") as ToolsListResponse;
 }
 
 export async function drainTextStream(

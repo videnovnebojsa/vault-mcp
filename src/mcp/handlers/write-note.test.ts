@@ -22,6 +22,22 @@ describe("handleVaultWriteNote", () => {
     expect(envelope.data.path).toBe("inbox/new-note.md");
   });
 
+  it("does not expose internal absPath fields in the response [API-01]", async () => {
+    const vault = new MockVaultRepository();
+    const services = makeServices({ vault });
+    const vaultManager = { trackSync: mock() } as unknown as VaultManager;
+
+    const result = await handleVaultWriteNote(
+      { path: "inbox/new-note", content: "content here", vault: "default" },
+      services,
+      vaultManager,
+    );
+
+    const envelope = JSON.parse(result.content[0]?.text ?? "{}");
+    expect(envelope.data.note).toBeDefined();
+    expect(envelope.data.note).not.toHaveProperty("absPath");
+  });
+
   it("calls trackSync when vaultSync is present", async () => {
     const vault = new MockVaultRepository();
     const handleUpsert = mock().mockResolvedValue(undefined);
