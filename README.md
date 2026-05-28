@@ -48,6 +48,23 @@
 - OpenTelemetry spans per tool call; webhook alert notifications
 - `/health` and `/ready` endpoints for service probes
 
+## Example Prompts
+
+Tell your agent what you need — vault-mcp picks the right tool automatically:
+
+- "Search my vault for notes on distributed tracing"
+- "Capture this idea: use SQLite WAL mode for concurrent readers"
+- "Open today's daily note"
+- "Find notes similar to Projects/architecture-rfc but not linked to it"
+- "Show me the Decision section of Projects/db-schema"
+- "Triage my inbox — auto-move anything above 80% confidence"
+- "What tags do I use most in my vault?"
+- "Rebuild the search index"
+
+See [docs/prompts.md](docs/prompts.md) for the full prompt guide covering all 18 tools.
+
+---
+
 ## Quick Start
 
 ### Option 1 — Quick install (no Bun required)
