@@ -22,6 +22,23 @@ describe("handleVaultUpdateProperties", () => {
     expect(envelope.data.ok).toBe(true);
   });
 
+  it("does not expose internal absPath fields in the response [API-01]", async () => {
+    const vault = new MockVaultRepository();
+    await vault.writeNote("inbox/note", { content: "content", frontmatter: { existing: "value" } });
+    const vaultManager: SyncTracker = { trackSync: mock() };
+    const services = makeServices({ vault });
+
+    const result = await handleVaultUpdateProperties(
+      { path: "inbox/note", properties: { new_prop: "new" }, vault: "default" },
+      services,
+      vaultManager,
+    );
+
+    const envelope = JSON.parse(result.content[0]?.text ?? "{}");
+    expect(envelope.data.note).toBeDefined();
+    expect(envelope.data.note).not.toHaveProperty("absPath");
+  });
+
   it("throws when note not found", async () => {
     const services = makeServices();
     const vaultManager: SyncTracker = { trackSync: mock() };

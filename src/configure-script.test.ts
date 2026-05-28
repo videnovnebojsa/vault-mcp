@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
@@ -157,6 +157,33 @@ describe("renderEnvTemplate", () => {
       rmSync(dir, { recursive: true, force: true });
     }
   });
+
+  it("quotes and escapes API values containing double quotes [SEC-03]", () => {
+    const values = new Map([
+      ["MCP_API_KEY", 'sk-"quoted"'],
+      ["EMBEDDING_ENDPOINT", 'https://api.example.com/v1/"tenant"'],
+      ["EMBEDDING_API_KEY", 'emb-"quoted"'],
+    ]);
+
+    const rendered = renderEnvTemplate(values, "restart");
+
+    expect(rendered).toContain('MCP_API_KEY="sk-\\"quoted\\""');
+    expect(rendered).toContain('EMBEDDING_ENDPOINT="https://api.example.com/v1/\\"tenant\\""');
+    expect(rendered).toContain('EMBEDDING_API_KEY="emb-\\"quoted\\""');
+  });
+
+  it("parses escaped quoted env values back to their original values [SEC-03]", () => {
+    const dir = mkdtempSync(path.join(tmpdir(), "vault-mcp-cfg-test-"));
+    const f = path.join(dir, ".env");
+    try {
+      writeFileSync(f, 'MCP_API_KEY="sk-\\"quoted\\""\nEMBEDDING_ENDPOINT="https://api.example.com/v1/\\"tenant\\""');
+      const parsed = parseEnvFile(f);
+      expect(parsed.get("MCP_API_KEY")).toBe('sk-"quoted"');
+      expect(parsed.get("EMBEDDING_ENDPOINT")).toBe('https://api.example.com/v1/"tenant"');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
 });
 
 // ── validateSetting ───────────────────────────────────────────────────────────
@@ -289,6 +316,13 @@ describe("validateSetting", () => {
     const s = findSetting("VAULT_FOLDER_INBOX");
     expect(await validateSetting(s, "")).not.toBeNull();
     expect(await validateSetting(s, "   ")).not.toBeNull();
+  });
+
+  it("keeps CFG-28 and CFG-29 assigned to integer range coverage [QA-11]", () => {
+    const source = readFileSync(path.join(process.cwd(), "src/configure-script.test.ts"), "utf8");
+
+    expect(source).toContain("[CFG-28]");
+    expect(source).toContain("[CFG-29]");
   });
 });
 

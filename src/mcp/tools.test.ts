@@ -98,6 +98,16 @@ describe("tool schemas", () => {
     expect(schema?.operations?.safeParse([{ type: "move", path: "src/a", to_path: "dest/b" }]).success).toBe(true);
   });
 
+  it("defaults batch continue_on_error to false at the schema layer [API-03]", () => {
+    const { server, schemas } = createMockServer();
+    registerTools({ server, vaultManager: makeTestManager(makeVault()) as unknown as VaultManager });
+
+    expect(schemas.get("vault_batch")?.continue_on_error?.safeParse(undefined)).toMatchObject({
+      success: true,
+      data: false,
+    });
+  });
+
   it("rejects blank find-connections paths at the schema layer", () => {
     const { server, schemas } = createMockServer();
     registerTools({ server, vaultManager: makeTestManager(makeVault()) as unknown as VaultManager });
@@ -127,6 +137,13 @@ describe("tool schemas", () => {
     const folderSchema = schemas.get("vault_list_folder");
     expect(folderSchema?.recursive?.safeParse(undefined)).toMatchObject({ success: true, data: true });
     expect(folderSchema?.limit?.safeParse(undefined)).toMatchObject({ success: true, data: 100 });
+  });
+
+  it('documents "/" as the vault root for vault_list_folder [API-02]', () => {
+    const { server, descriptions } = createMockServer();
+    registerTools({ server, vaultManager: makeTestManager(makeVault()) as unknown as VaultManager });
+
+    expect(descriptions.get("vault_list_folder")).toContain('Use "/" for the vault root.');
   });
 
   it("registers current and deprecated note-with-links names with the same schema", () => {
@@ -1873,7 +1890,7 @@ describe("wrapHandler timeout enforcement", () => {
       expect(errorSpy).toHaveBeenCalledWith(
         "tools",
         expect.stringContaining("vault_read_note"),
-        expect.objectContaining({ err: expect.any(String) }),
+        expect.objectContaining({ err: expect.any(String), requestId: expect.any(String), stack: expect.any(String) }),
       );
     } finally {
       errorSpy.mockRestore();

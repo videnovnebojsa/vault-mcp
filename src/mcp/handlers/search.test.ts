@@ -475,6 +475,7 @@ describe("handleVaultSearch", () => {
     const data = JSON.parse(result.content[0]?.text ?? "{}");
     expect(data.items).toHaveLength(1);
     expect(data.items[0].path).toBe("allowed/note.md");
+    expect(data.total).toBe(1);
   });
 
   it("over-fetches candidateLimit by one with a pathFilter for scoped semantic search", async () => {

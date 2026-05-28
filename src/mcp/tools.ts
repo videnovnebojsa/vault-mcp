@@ -132,6 +132,8 @@ export function registerTools(opts: RegisterToolsOptions): void {
         if (!isVaultErr && !isUnknownVault) {
           logger.error("tools", `${toolName} threw an unexpected error`, {
             err: err instanceof Error ? err.message : String(err),
+            requestId: span.id,
+            ...(err instanceof Error && err.stack ? { stack: err.stack } : {}),
           });
         }
         const message = isUnknownVault ? "Unknown vault" : err instanceof Error ? err.message : String(err);
@@ -241,7 +243,7 @@ export function registerTools(opts: RegisterToolsOptions): void {
   // ── vault_list_folder ─────────────────────────────────────────────────────
   server.tool(
     "vault_list_folder",
-    "List notes in a vault folder with metadata. Returns lightweight summaries. Paginated responses include hasMore; nextOffset is omitted when hasMore is false.",
+    'List notes in a vault folder with metadata. Use "/" for the vault root. Returns lightweight summaries. Paginated responses include hasMore; nextOffset is omitted when hasMore is false.',
     {
       folder: PATH_PARAM("Vault-relative folder path"),
       recursive: z.boolean().default(true).describe("Recurse into subfolders (default true)"),
@@ -521,7 +523,7 @@ export function registerTools(opts: RegisterToolsOptions): void {
         .describe("List of operations to execute"),
       continue_on_error: z
         .boolean()
-        .optional()
+        .default(false)
         .describe("Continue processing remaining operations after a failure (default false)"),
       vault: VAULT_PARAM,
     },

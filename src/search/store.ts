@@ -45,8 +45,6 @@ self.onmessage = (event) => {
 };
 `;
 
-const BACKUP_WORKER_URL = URL.createObjectURL(new Blob([BACKUP_WORKER_SOURCE], { type: "text/javascript" }));
-
 export interface ISearchStore {
   getStatementCacheSize(): number;
   backup(destPath: string): void | Promise<void>;
@@ -377,7 +375,7 @@ export class VaultSearchStore implements ISearchStore {
   }
 
   listTags(acl?: { allowPaths: string[]; denyPaths: string[] }): Array<{ tag: string; count: number }> {
-    return this.listTagsPage(Number.MAX_SAFE_INTEGER, 0, acl).items;
+    return this.listTagsPage(this.countUniqueTags(acl), 0, acl).items;
   }
 
   listTagsPage(
@@ -670,11 +668,13 @@ function escapeLike(s: string): string {
 }
 
 function backupFileDatabaseInWorker(dbPath: string, destPath: string): Promise<void> {
-  const worker = new Worker(BACKUP_WORKER_URL, { type: "module" });
+  const workerUrl = URL.createObjectURL(new Blob([BACKUP_WORKER_SOURCE], { type: "text/javascript" }));
+  const worker = new Worker(workerUrl, { type: "module" });
 
   return new Promise((resolve, reject) => {
     const cleanup = () => {
       worker.terminate();
+      URL.revokeObjectURL(workerUrl);
     };
 
     worker.onmessage = (event: MessageEvent<BackupWorkerResponse>) => {

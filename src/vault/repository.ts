@@ -348,11 +348,10 @@ export class VaultRepository implements IVaultRepository {
     await this.collectFolderCandidates(absFolder, recursive, candidates, modifiedAfter);
     candidates.sort((a, b) => a.relPath.localeCompare(b.relPath));
 
-    const page: VaultNoteSummary[] = [];
-    for (const candidate of candidates.slice(offset, offset + limit)) {
-      const summary = await this.readFolderCandidate(candidate);
-      if (summary) page.push(summary);
-    }
+    const summaries = await Promise.all(
+      candidates.slice(offset, offset + limit).map((candidate) => this.readFolderCandidate(candidate)),
+    );
+    const page = summaries.filter((summary): summary is VaultNoteSummary => summary !== undefined);
 
     return { items: page, total: candidates.length };
   }
@@ -380,6 +379,8 @@ export class VaultRepository implements IVaultRepository {
     const entries = await fs.readdir(dir, { withFileTypes: true }).catch(() => null);
     if (!entries) return;
 
+    const subdirectoryTasks: Array<Promise<void>> = [];
+
     for (const entry of entries) {
       if (entry.name.startsWith(".")) continue;
 
@@ -393,7 +394,7 @@ export class VaultRepository implements IVaultRepository {
           rethrowSecurityError(err);
           continue;
         }
-        await this.collectFolderCandidates(fullPath, recursive, candidates, modifiedAfter);
+        subdirectoryTasks.push(this.collectFolderCandidates(fullPath, recursive, candidates, modifiedAfter));
       } else if (entry.isFile() && entry.name.endsWith(".md")) {
         try {
           const stat = await fs.stat(fullPath);
@@ -413,6 +414,8 @@ export class VaultRepository implements IVaultRepository {
         }
       }
     }
+
+    await Promise.all(subdirectoryTasks);
   }
 
   private async readFolderCandidate(candidate: FolderCandidate): Promise<VaultNoteSummary | undefined> {

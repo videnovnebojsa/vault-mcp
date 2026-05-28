@@ -41,6 +41,16 @@ describe("otelSpan — before initOtel", () => {
     expect(source).toContain('import("@opentelemetry/sdk-node")');
   });
 
+  it("annotates each OTel ts-expect-error with the upstream TypeScript issue [ARCH-04]", () => {
+    const source = fs.readFileSync(path.join(process.cwd(), "src/utils/otel.ts"), "utf8");
+    const suppressions = source.match(/@ts-expect-error[^\n]*/g) ?? [];
+
+    expect(suppressions.length).toBeGreaterThan(0);
+    for (const suppression of suppressions) {
+      expect(suppression).toContain("microsoft/TypeScript#58176");
+    }
+  });
+
   it("resetOtelForTest is guarded from production use [SEC-01]", () => {
     const original = process.env.NODE_ENV;
     process.env.NODE_ENV = "production";

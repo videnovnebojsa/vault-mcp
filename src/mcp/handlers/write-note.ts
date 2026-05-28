@@ -2,7 +2,7 @@ import { VaultError, VaultErrorCode } from "../../utils/errors.js";
 import { logger } from "../../utils/logger.js";
 import type { SyncTracker, VaultServices } from "../../vault/manager.js";
 import type { VaultFrontmatter } from "../../vault/types.js";
-import { successResult, type ToolResult } from "../format.js";
+import { successResult, type ToolResult, toClientNote } from "../format.js";
 
 export async function handleVaultWriteNote(
   args: {
@@ -31,5 +31,5 @@ export async function handleVaultWriteNote(
       ),
     );
   }
-  return successResult(result);
+  return successResult(result.note ? { ...result, note: toClientNote(result.note) } : result);
 }

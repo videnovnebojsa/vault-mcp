@@ -1,7 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
-import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir, userInfo } from "node:os";
 import path from "node:path";
+import { spawnSync } from "bun";
 
 import { createVaultFolders, expandHome, readExistingConfig } from "../scripts/setup";
 import { resolveVaultFolders, VAULT_FOLDERS } from "./config/folders.js";
@@ -48,6 +49,12 @@ describe("createVaultFolders", () => {
 });
 
 describe("setup script helpers", () => {
+  it("requires release tags to match the whole semver prefix [SEC-01]", () => {
+    const script = readFileSync(path.join(process.cwd(), "install.sh"), "utf8");
+
+    expect(script).toContain('[[ "$LATEST_TAG" =~ ^v[0-9]+\\.[0-9]+\\.[0-9]+$ ]]');
+  });
+
   it("expands the current user's home directory for ~ and ~user paths [SETUP-01]", () => {
     expect(expandHome("~")).toBe(homedir());
     expect(expandHome("~/vault")).toBe(path.join(homedir(), "vault"));
@@ -71,6 +78,74 @@ describe("setup script helpers", () => {
     } finally {
       rmSync(fixtureDir, { recursive: true, force: true });
     }
+  });
+
+  it("escapes double quotes in vault paths written by install.sh [SEC-04]", () => {
+    const home = mkdtempSync(path.join(tmpdir(), "vault-mcp-install-home-"));
+    const vault = path.join(home, 'Vault "Quoted"');
+    const bin = path.join(home, "vault-mcp");
+
+    try {
+      writeFileSync(bin, "#!/bin/sh\nexit 0\n");
+      chmodSync(bin, 0o755);
+      mkdirSync(vault, { recursive: true });
+
+      const result = spawnSync({
+        cmd: ["bash", "install.sh", `--local-bin=${bin}`, "--no-service"],
+        cwd: process.cwd(),
+        env: { ...process.env, HOME: home },
+        stdin: new TextEncoder().encode(`${vault}\n3782\n\nN\n`),
+        stdout: "pipe",
+        stderr: "pipe",
+      });
+
+      expect(result.exitCode).toBe(0);
+      const envFile = readFileSync(path.join(home, ".config", "vault-mcp", ".env"), "utf8");
+      expect(envFile).toContain('OBSIDIAN_VAULT_PATH="');
+      expect(envFile).toContain('\\"Quoted\\"');
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  it("reports the installed version in install.sh --configure mode [QA-05]", () => {
+    const home = mkdtempSync(path.join(tmpdir(), "vault-mcp-configure-home-"));
+    const vault = path.join(home, "Vault");
+    const configDir = path.join(home, ".config", "vault-mcp");
+
+    try {
+      mkdirSync(vault, { recursive: true });
+      mkdirSync(configDir, { recursive: true });
+      writeFileSync(path.join(configDir, ".env"), `OBSIDIAN_VAULT_PATH="${vault}"\nMCP_PORT=3782\n`);
+      writeFileSync(path.join(configDir, ".installed-version"), "v1.2.3");
+
+      const result = spawnSync({
+        cmd: ["bash", "install.sh", "--configure", "--no-service"],
+        cwd: process.cwd(),
+        env: { ...process.env, HOME: home },
+        stdin: new TextEncoder().encode("\n\n\nN\n"),
+        stdout: "pipe",
+        stderr: "pipe",
+      });
+
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout.toString()).toContain("vault-mcp v1.2.3 is ready");
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  it('does not describe replacing a "local" build as an upgrade [ARCH-07]', () => {
+    const script = readFileSync(path.join(process.cwd(), "install.sh"), "utf8");
+
+    expect(script).toContain('if [ "$INSTALLED_TAG" = "local" ]; then');
+    expect(script).toContain("Replacing local build with ${LATEST_TAG}");
+  });
+
+  it("warns instead of silently skipping service setup on unsupported OS [ARCH-06]", () => {
+    const script = readFileSync(path.join(process.cwd(), "install.sh"), "utf8");
+
+    expect(script).toContain('warn "Background service setup is not supported on ${OS}-${ARCH}"');
   });
 });
 

@@ -53,15 +53,15 @@ interface LoadedOtelModules {
 
 async function loadOtelModules(): Promise<LoadedOtelModules> {
   const [sdkNode, autoInstrumentations, otlpExporter, traceNode, api] = await Promise.all([
-    // @ts-expect-error
+    // @ts-expect-error -- Optional OTel deps stay out of the default install profile; see microsoft/TypeScript#58176.
     import("@opentelemetry/sdk-node"),
-    // @ts-expect-error
+    // @ts-expect-error -- Optional OTel deps stay out of the default install profile; see microsoft/TypeScript#58176.
     import("@opentelemetry/auto-instrumentations-node"),
-    // @ts-expect-error
+    // @ts-expect-error -- Optional OTel deps stay out of the default install profile; see microsoft/TypeScript#58176.
     import("@opentelemetry/exporter-trace-otlp-http"),
-    // @ts-expect-error
+    // @ts-expect-error -- Optional OTel deps stay out of the default install profile; see microsoft/TypeScript#58176.
     import("@opentelemetry/sdk-trace-node"),
-    // @ts-expect-error
+    // @ts-expect-error -- Optional OTel deps stay out of the default install profile; see microsoft/TypeScript#58176.
     import("@opentelemetry/api"),
   ]);
 

@@ -124,4 +124,63 @@ jobs:
         with: { bun-version: "1.x" }
       - run: bun install --frozen-lockfile
       - run: bun run build
-      - run: bun run build:bun
+      - run: BUN_BINARY_NAME=vault-mcp-linux-x64 bun run build:bun
+      - name: Upload Linux binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: vault-mcp-linux-x64
+          path: dist-bin/vault-mcp-linux-x64
+          if-no-files-found: error
+
+  integration:
+    name: Integration (Linux binary)
+    needs: [build]
+    runs-on: ubuntu-latest
+    # Run on push and PR. GitHub exposes pull_request.changed_files as a count,
+    # not a path list, so path-sensitive PR filtering would skip real changes.
+    if: |
+      github.event_name == 'push' ||
+      github.event_name == 'pull_request'
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6  # v2
+        with: { bun-version: "1.x" }
+      - run: bun install --frozen-lockfile
+
+      - name: Download Linux binary
+        uses: actions/download-artifact@v4
+        with:
+          name: vault-mcp-linux-x64
+          path: dist-bin
+      - run: chmod +x dist-bin/vault-mcp-linux-x64
+
+      # Create a minimal vault so install.sh has a valid path to accept
+      - name: Create install-time vault
+        run: mkdir -p /tmp/vault-install
+
+      # Exercise install.sh with a local binary (no GitHub download).
+      # Config answers piped via stdin: vault path, port, API key (empty), embeddings (N).
+      - name: Run install.sh (--local-bin, --no-service)
+        run: |
+          printf '/tmp/vault-install\n3782\n\nN\n' | \
+            bash install.sh \
+              --local-bin=./dist-bin/vault-mcp-linux-x64 \
+              --no-service
+
+      # Assert the .env was written with the variable names the server actually reads.
+      # This is a regression guard — it would have caught the VAULT_DEFAULT_PATH bug.
+      - name: Assert .env correctness
+        run: |
+          grep -q 'OBSIDIAN_VAULT_PATH=' ~/.config/vault-mcp/.env \
+            || { echo "FAIL: OBSIDIAN_VAULT_PATH missing from .env"; exit 1; }
+          grep -q 'MCP_PORT=3782' ~/.config/vault-mcp/.env \
+            || { echo "FAIL: MCP_PORT missing from .env"; exit 1; }
+          ! grep -q 'VAULT_DEFAULT_PATH' ~/.config/vault-mcp/.env \
+            || { echo "FAIL: stale VAULT_DEFAULT_PATH found in .env"; exit 1; }
+          echo "OK: .env keys correct"
+
+      # Full end-to-end MCP tool test against the installed binary.
+      # The integration test creates its own isolated vault and config dir,
+      # starts the binary, and exercises 17 tool calls with real assertions.
+      - name: Run integration test
+        run: INTEGRATION_TEST_PORT=34782 bun run scripts/integration-test.ts ~/.local/bin/vault-mcp

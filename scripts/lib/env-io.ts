@@ -26,7 +26,7 @@ export function parseEnvFile(filePath: string): Map<string, string> {
     if (eqIdx === -1) continue;
 
     const key = trimmed.slice(0, eqIdx).trim();
-    const value = trimmed.slice(eqIdx + 1).trim();
+    const value = parseEnvValue(trimmed.slice(eqIdx + 1).trim());
 
     if (/^[A-Z_][A-Z0-9_]*$/.test(key)) {
       map.set(key, value);
@@ -42,9 +42,22 @@ export function parseEnvFile(filePath: string): Map<string, string> {
  * - If `values` has a non-empty value for the key → `KEY=value` (active)
  * - Otherwise → `# KEY=hint   # comment` (commented-out example)
  */
+function parseEnvValue(value: string): string {
+  if (value.length >= 2 && value.startsWith('"') && value.endsWith('"')) {
+    const inner = value.slice(1, -1);
+    return inner.replace(/\\(["\\$`])/g, "$1").replace(/\\n/g, "\n");
+  }
+  return value;
+}
+
+function quoteEnvValue(value: string): string {
+  if (!/[\s"\\$`#]/.test(value)) return value;
+  return `"${value.replace(/\\/g, "\\\\").replace(/"/g, '\\"').replace(/\$/g, "\\$").replace(/`/g, "\\`").replace(/\n/g, "\\n")}"`;
+}
+
 function envLine(values: Map<string, string>, key: string, hint = "", comment = ""): string {
   const v = values.get(key);
-  if (v !== undefined && v !== "") return `${key}=${v}`;
+  if (v !== undefined && v !== "") return `${key}=${quoteEnvValue(v)}`;
   const suffix = comment ? `   # ${comment}` : "";
   return `# ${key}=${hint}${suffix}`;
 }

@@ -3,18 +3,25 @@
  * unit tests for session-management logic (bounds + idle eviction).
  */
 
-import { afterEach, beforeEach, describe, expect, it, jest, mock } from "bun:test";
+import { afterEach, beforeEach, describe, expect, it, jest, mock, spyOn } from "bun:test";
 import http from "node:http";
 import net from "node:net";
 import type { BootstrapResult } from "./bootstrap.js";
 import { VAULT_FOLDERS } from "./config/folders.js";
 import type { VaultConfig } from "./config.js";
 import {
+  buildPublicHealthResponse,
   closeActiveSessionsForShutdown,
+  createInFlightRequestTracker,
+  createUnrefedTimeoutPromise,
   handleExistingSessionRequest,
+  handleNewSessionRequest,
+  handleNewSessionTransportError,
   parsePositiveIntEnv,
   startHttpServer,
 } from "./http.js";
+import { createServer as createMcpServer } from "./mcp/server.js";
+import { metrics } from "./utils/metrics.js";
 import type { VaultServices } from "./vault/manager.js";
 
 // ── HTTP helpers ───────────────────────────────────────────────────────────────
@@ -36,6 +43,50 @@ function httpGet(url: string): Promise<{ status: number; body: unknown }> {
         });
       })
       .on("error", reject);
+  });
+}
+
+function httpRequestJson(
+  url: string,
+  opts: {
+    method: string;
+    body?: unknown;
+    headers?: Record<string, string | number>;
+  },
+): Promise<{ status: number; body: unknown; headers: http.IncomingHttpHeaders }> {
+  const payload = opts.body === undefined ? undefined : JSON.stringify(opts.body);
+  return new Promise((resolve, reject) => {
+    const req = http.request(
+      url,
+      {
+        method: opts.method,
+        headers: {
+          ...(payload
+            ? {
+                "content-type": "application/json",
+                "content-length": Buffer.byteLength(payload),
+              }
+            : {}),
+          ...opts.headers,
+        },
+      },
+      (res) => {
+        let data = "";
+        res.on("data", (chunk: string) => {
+          data += chunk;
+        });
+        res.on("end", () => {
+          try {
+            resolve({ status: res.statusCode ?? 0, body: JSON.parse(data), headers: res.headers });
+          } catch {
+            resolve({ status: res.statusCode ?? 0, body: data, headers: res.headers });
+          }
+        });
+      },
+    );
+    req.on("error", reject);
+    if (payload) req.end(payload);
+    else req.end();
   });
 }
 
@@ -199,6 +250,8 @@ function makeMockSvc(overrides: Partial<VaultServices> = {}): VaultServices {
   };
 }
 
+let nextTestPort = 41000;
+
 function makeBootstrap(vaultServices: Record<string, VaultServices> = {}): BootstrapResult {
   const defaultSvc = makeMockSvc();
   const allSvcs: Record<string, VaultServices> = { default: defaultSvc, ...vaultServices };
@@ -219,7 +272,7 @@ function makeBootstrap(vaultServices: Record<string, VaultServices> = {}): Boots
     backup: { enabled: false, dir: "", maxBackups: 5 },
     capture: { enableCapturePipeline: false, logRawInput: false },
     watcher: { enabled: false, debounceMs: 300 },
-    mcpPort: 0,
+    mcpPort: nextTestPort++,
     mcpHost: "127.0.0.1",
     mcpApiKey: "",
     alertWebhookUrl: "",
@@ -243,6 +296,52 @@ function makeBootstrap(vaultServices: Record<string, VaultServices> = {}): Boots
   };
 
   return { config, vaultManager } as unknown as BootstrapResult;
+}
+
+const initializeRequest = {
+  jsonrpc: "2.0",
+  id: 1,
+  method: "initialize",
+  params: {
+    protocolVersion: "2025-03-26",
+    capabilities: {},
+    clientInfo: { name: "test", version: "1.0.0" },
+  },
+};
+
+function jsonRpcError(message: string) {
+  return {
+    jsonrpc: "2.0",
+    error: { code: -32000, message },
+    id: null,
+  };
+}
+
+function makeNodeResponseDouble() {
+  let responseBody = "";
+  const headers = new Map<string, string>();
+
+  return {
+    res: {
+      headersSent: false,
+      statusCode: 200,
+      setHeader: (name: string, value: string) => {
+        headers.set(name.toLowerCase(), value);
+      },
+      end: (body?: string) => {
+        responseBody = body ?? "";
+      },
+      status(code: number) {
+        this.statusCode = code;
+        return this;
+      },
+      json(body: unknown) {
+        responseBody = JSON.stringify(body);
+      },
+    } as unknown as http.ServerResponse & { status(code: number): http.ServerResponse & { json(body: unknown): void } },
+    getBody: () => responseBody,
+    getHeaders: () => headers,
+  };
 }
 
 // ── Endpoint tests ─────────────────────────────────────────────────────────────
@@ -286,6 +385,134 @@ describe("GET /health (authenticated — vault states)", () => {
     expect(b.status).toBe("ok");
     expect(b.vaults).toBeDefined();
     expect(b.vaults["default"]).toMatchObject({ bootFailed: false, ready: true });
+  });
+
+  it("checks authenticated vault state probes concurrently [PERF-04]", async () => {
+    let started = 0;
+    const resolvers: Array<() => void> = [];
+    const makeConcurrentSvc = () => {
+      const svc = makeMockSvc();
+      Object.defineProperty(svc, "bootReady", {
+        get() {
+          started += 1;
+          const promise = new Promise<void>((resolve) => {
+            resolvers.push(resolve);
+          });
+          if (started === 3) {
+            for (const resolve of resolvers.splice(0)) resolve();
+          }
+          return promise;
+        },
+      });
+      return svc;
+    };
+
+    const boot = makeBootstrap({
+      default: makeConcurrentSvc(),
+      second: makeConcurrentSvc(),
+      third: makeConcurrentSvc(),
+    });
+    boot.config.mcpApiKey = "test-api-key";
+    handle = await startHttpServer(boot);
+    const port = await waitForListen(handle.httpServer);
+
+    const { status, body } = await new Promise<{ status: number; body: unknown }>((resolve, reject) => {
+      const req = http.request(
+        { host: "127.0.0.1", port, path: "/health", headers: { Authorization: "Bearer test-api-key" } },
+        (res) => {
+          let data = "";
+          res.on("data", (chunk: string) => {
+            data += chunk;
+          });
+          res.on("end", () => {
+            try {
+              resolve({ status: res.statusCode ?? 0, body: JSON.parse(data) });
+            } catch {
+              resolve({ status: res.statusCode ?? 0, body: data });
+            }
+          });
+        },
+      );
+      req.on("error", reject);
+      req.end();
+    });
+
+    expect(status).toBe(200);
+    const vaults = (body as { vaults: Record<string, { ready: boolean }> }).vaults;
+    expect(vaults).toBeDefined();
+    expect(Object.keys(vaults)).toHaveLength(3);
+    expect(vaults["default"]?.ready).toBe(true);
+    expect(vaults["second"]?.ready).toBe(true);
+    expect(vaults["third"]?.ready).toBe(true);
+  });
+
+  it("falls back to the public payload when detailed health probes throw [ERR-06]", async () => {
+    const boot = makeBootstrap();
+    boot.config.mcpApiKey = "test-api-key";
+    let requestListener!: (req: http.IncomingMessage, res: http.ServerResponse) => void;
+    const metricsSnapshot = spyOn(metrics, "snapshot").mockImplementation(() => {
+      throw new Error("metrics blew up");
+    });
+
+    try {
+      const fakeServer = {
+        listening: true,
+        address: () => ({ port: 41000 }),
+        on: () => fakeServer,
+        listen: (_port: number, _host: string, onListen?: () => void) => {
+          onListen?.();
+          return fakeServer;
+        },
+        closeIdleConnections: () => {},
+        close: (callback?: (err?: Error) => void) => {
+          callback?.();
+          return fakeServer;
+        },
+        listenerCount: () => 1,
+      };
+
+      handle = await startHttpServer(boot, {
+        createNodeServer: (listener) => {
+          requestListener = listener;
+          return fakeServer as unknown as http.Server;
+        },
+      });
+
+      const response = makeNodeResponseDouble();
+      let resolveResponse!: () => void;
+      const responseWritten = new Promise<void>((resolve) => {
+        resolveResponse = resolve;
+      });
+      const originalJson = response.res.json.bind(response.res);
+      const originalEnd = response.res.end.bind(response.res);
+      response.res.json = ((body: unknown) => {
+        originalJson(body);
+        resolveResponse();
+      }) as typeof response.res.json;
+      response.res.end = ((body?: string) => {
+        originalEnd(body);
+        resolveResponse();
+      }) as typeof response.res.end;
+      requestListener(
+        {
+          method: "GET",
+          url: "/health",
+          headers: { authorization: "Bearer test-api-key", host: "127.0.0.1" },
+          on: () => undefined,
+        } as unknown as http.IncomingMessage,
+        response.res,
+      );
+      await responseWritten;
+
+      expect(response.res.statusCode).toBe(200);
+      const body = JSON.parse(response.getBody()) as Record<string, unknown>;
+      expect(body).toMatchObject({ status: "ok", sessions: 0 });
+      expect(body.transport).toBeUndefined();
+      expect(body.vaults).toBeUndefined();
+      expect(body.metrics).toBeUndefined();
+    } finally {
+      metricsSnapshot.mockRestore();
+    }
   });
 });
 
@@ -335,6 +562,40 @@ describe("GET /ready", () => {
     expect((body as { unready?: string[] }).unready).toBeUndefined();
     expect((body as { unreadyCount?: number }).unreadyCount).toBe(1);
   });
+
+  it("checks all vault readiness probes concurrently [PERF-03]", async () => {
+    let started = 0;
+    const resolvers: Array<() => void> = [];
+    const makeConcurrentSvc = () => {
+      const svc = makeMockSvc();
+      Object.defineProperty(svc, "bootReady", {
+        get() {
+          started += 1;
+          const promise = new Promise<void>((resolve) => {
+            resolvers.push(resolve);
+          });
+          if (started === 3) {
+            for (const resolve of resolvers.splice(0)) resolve();
+          }
+          return promise;
+        },
+      });
+      return svc;
+    };
+
+    const boot = makeBootstrap({
+      default: makeConcurrentSvc(),
+      second: makeConcurrentSvc(),
+      third: makeConcurrentSvc(),
+    });
+    handle = await startHttpServer(boot);
+    const port = await waitForListen(handle.httpServer);
+
+    const { status, body } = await httpGet(`http://127.0.0.1:${port}/ready`);
+
+    expect(status).toBe(200);
+    expect(body).toMatchObject({ ready: true, vaultCount: 3 });
+  });
 });
 
 describe("POST /mcp session cap", () => {
@@ -364,6 +625,248 @@ describe("POST /mcp session cap", () => {
   });
 });
 
+describe("POST /mcp constructor failures", () => {
+  let handle: Awaited<ReturnType<typeof startHttpServer>>;
+
+  afterEach(async () => {
+    await handle?.close();
+  });
+
+  it("returns 500 when the MCP server factory throws before request handling [ERR-02]", async () => {
+    handle = await startHttpServer(makeBootstrap(), {
+      createMcpServer: () => {
+        throw new Error("constructor failed");
+      },
+    });
+    const port = await waitForListen(handle.httpServer);
+
+    const { status, body } = await httpPostJsonWithHeaders(`http://127.0.0.1:${port}/mcp`, initializeRequest, {
+      Accept: "application/json, text/event-stream",
+    });
+
+    expect(status).toBe(500);
+    expect(body).toEqual(jsonRpcError("Internal server error"));
+  });
+
+  it("wires transport.onerror before server.connect takes ownership [ERR-01]", async () => {
+    let sawOnError = false;
+    const close = mock().mockResolvedValue(undefined);
+
+    handle = await startHttpServer(makeBootstrap(), {
+      createMcpServer: () =>
+        ({
+          connect: async (transport: { onerror?: unknown }) => {
+            sawOnError = typeof transport.onerror === "function";
+            throw new Error("connect failed");
+          },
+          close,
+        }) as unknown as ReturnType<typeof createServer>,
+    });
+    const port = await waitForListen(handle.httpServer);
+
+    const { status } = await httpPostJsonWithHeaders(`http://127.0.0.1:${port}/mcp`, initializeRequest, {
+      Accept: "application/json, text/event-stream",
+    });
+
+    expect(status).toBe(500);
+    expect(sawOnError).toBe(true);
+    expect(close).toHaveBeenCalledTimes(1);
+  });
+
+  it("returns 500 and closes the server when server.connect throws [QA-02]", async () => {
+    const close = mock().mockResolvedValue(undefined);
+
+    handle = await startHttpServer(makeBootstrap(), {
+      createMcpServer: () =>
+        ({
+          connect: async () => {
+            throw new Error("connect failed");
+          },
+          close,
+        }) as unknown as ReturnType<typeof createServer>,
+    });
+    const port = await waitForListen(handle.httpServer);
+
+    const { status, body } = await httpPostJsonWithHeaders(`http://127.0.0.1:${port}/mcp`, initializeRequest, {
+      Accept: "application/json, text/event-stream",
+    });
+
+    expect(status).toBe(500);
+    expect(body).toEqual(jsonRpcError("Internal server error"));
+    expect(close).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("POST /mcp concurrency limits", () => {
+  let handle: Awaited<ReturnType<typeof startHttpServer>>;
+
+  afterEach(async () => {
+    await handle?.close();
+  });
+
+  it("rejects a concurrent POST before creating another in-flight MCP server [SEC-01]", async () => {
+    let connectCalls = 0;
+    let releaseFirstConnect!: () => void;
+    let firstConnectStarted!: () => void;
+    const firstConnectStartedPromise = new Promise<void>((resolve) => {
+      firstConnectStarted = resolve;
+    });
+    const releaseFirstConnectPromise = new Promise<void>((resolve) => {
+      releaseFirstConnect = resolve;
+    });
+
+    handle = await startHttpServer(makeBootstrap(), {
+      maxConcurrentRequests: 1,
+      createMcpServer: (options) => {
+        const server = createMcpServer(options);
+        const originalConnect = server.connect.bind(server);
+        connectCalls += 1;
+        if (connectCalls === 1) {
+          server.connect = async (transport) => {
+            firstConnectStarted();
+            await releaseFirstConnectPromise;
+            return originalConnect(transport);
+          };
+        }
+        return server;
+      },
+    });
+    const port = await waitForListen(handle.httpServer);
+
+    const firstRequest = httpPostJsonWithHeaders(`http://127.0.0.1:${port}/mcp`, initializeRequest, {
+      Accept: "application/json, text/event-stream",
+    });
+    await firstConnectStartedPromise;
+
+    const secondResponse = await httpPostJsonWithHeaders(`http://127.0.0.1:${port}/mcp`, initializeRequest, {
+      Accept: "application/json, text/event-stream",
+    });
+
+    releaseFirstConnect();
+    await firstRequest;
+
+    expect(secondResponse.status).toBe(503);
+  });
+});
+
+describe("handleNewSessionRequest", () => {
+  it("strips stale mcp-session-id before invoking the transport [SEC-04]", async () => {
+    let seenHeader: string | string[] | undefined;
+    const createTransport = () => ({
+      sessionId: undefined as string | undefined,
+      onclose: undefined as (() => void) | undefined,
+      onerror: undefined as ((err: Error) => void) | undefined,
+      handleRequest: async (
+        req: http.IncomingMessage & { headers: Record<string, string | string[] | undefined> },
+        res,
+      ) => {
+        seenHeader = req.headers["mcp-session-id"];
+        res.statusCode = 200;
+        res.end(JSON.stringify({ ok: true }));
+      },
+    });
+
+    await handleNewSessionRequest({
+      boot: makeBootstrap(),
+      createMcpServer: () =>
+        ({
+          connect: async () => {},
+          close: async () => {},
+        }) as unknown as ReturnType<typeof createMcpServer>,
+      createTransport,
+      sessions: new Map(),
+      req: {
+        method: "POST",
+        headers: { "mcp-session-id": "stale-session-id" },
+        body: initializeRequest,
+      } as unknown as Parameters<typeof handleNewSessionRequest>[0]["req"],
+      res: makeNodeResponseDouble().res,
+      requestId: "sec-04",
+    });
+
+    expect(seenHeader).toBeUndefined();
+  });
+
+  it("keeps concurrent per-request MCP servers isolated [QA-08]", async () => {
+    let startedRequests = 0;
+    let releaseRequests!: () => void;
+    let resolveBothStarted!: () => void;
+    const boot = makeBootstrap();
+    const serverInstances: Array<{ close: () => Promise<void> }> = [];
+    const transportInstances: Array<{ handleRequest: (...args: unknown[]) => Promise<void> }> = [];
+    const bothStartedPromise = new Promise<void>((resolve) => {
+      resolveBothStarted = resolve;
+    });
+    const releaseRequestsPromise = new Promise<void>((resolve) => {
+      releaseRequests = resolve;
+    });
+    const makeReq = (id: number) =>
+      ({
+        method: "POST",
+        headers: {},
+        body: { ...initializeRequest, id },
+      }) as unknown as Parameters<typeof handleNewSessionRequest>[0]["req"];
+
+    const firstResponse = makeNodeResponseDouble();
+    const secondResponse = makeNodeResponseDouble();
+    const createTransport = () => {
+      const transport = {
+        sessionId: undefined as string | undefined,
+        onclose: undefined as (() => void) | undefined,
+        onerror: undefined as ((err: Error) => void) | undefined,
+        handleRequest: async (_req: http.IncomingMessage, res: http.ServerResponse, body?: unknown) => {
+          startedRequests += 1;
+          if (startedRequests === 2) resolveBothStarted();
+          await releaseRequestsPromise;
+          res.statusCode = 200;
+          res.setHeader("content-type", "application/json");
+          res.end(JSON.stringify({ jsonrpc: "2.0", result: { body }, id: (body as { id: number }).id }));
+        },
+      };
+      transportInstances.push(transport);
+      return transport;
+    };
+    const createMcpServerDouble = () => {
+      const server = {
+        connect: async () => {},
+        close: async () => {},
+      };
+      serverInstances.push(server);
+      return server as unknown as ReturnType<typeof createMcpServer>;
+    };
+
+    const first = handleNewSessionRequest({
+      boot,
+      createMcpServer: createMcpServerDouble,
+      createTransport,
+      sessions: new Map(),
+      req: makeReq(1),
+      res: firstResponse.res,
+      requestId: "qa-08-a",
+    });
+    const second = handleNewSessionRequest({
+      boot,
+      createMcpServer: createMcpServerDouble,
+      createTransport,
+      sessions: new Map(),
+      req: makeReq(2),
+      res: secondResponse.res,
+      requestId: "qa-08-b",
+    });
+
+    await bothStartedPromise;
+    releaseRequests();
+    await Promise.all([first, second]);
+
+    expect(serverInstances).toHaveLength(2);
+    expect(serverInstances[0]).not.toBe(serverInstances[1]);
+    expect(transportInstances).toHaveLength(2);
+    expect(transportInstances[0]).not.toBe(transportInstances[1]);
+    expect(JSON.parse(firstResponse.getBody())).toMatchObject({ id: 1, result: { body: { id: 1 } } });
+    expect(JSON.parse(secondResponse.getBody())).toMatchObject({ id: 2, result: { body: { id: 2 } } });
+  });
+});
+
 describe("HTTP server errors", () => {
   let handle: Awaited<ReturnType<typeof startHttpServer>>;
 
@@ -376,6 +879,88 @@ describe("HTTP server errors", () => {
 
     expect(handle.httpServer.listenerCount("error")).toBeGreaterThan(0);
     await waitForListen(handle.httpServer);
+  });
+
+  it("closes idle connections before waiting on server.close [ERR-03]", async () => {
+    const calls: string[] = [];
+    const fakeServer = {
+      listening: true,
+      address: () => ({ port: 41000 }),
+      on: () => fakeServer,
+      listen: (_port: number, _host: string, onListen?: () => void) => {
+        onListen?.();
+        return fakeServer;
+      },
+      closeIdleConnections: () => {
+        calls.push("idle");
+      },
+      close: (callback?: (err?: Error) => void) => {
+        calls.push("close");
+        callback?.();
+        return fakeServer;
+      },
+      listenerCount: () => 1,
+    };
+
+    handle = await startHttpServer(makeBootstrap(), {
+      createNodeServer: () => fakeServer as unknown as http.Server,
+    });
+
+    await handle.close();
+
+    expect(calls).toEqual(["idle", "close"]);
+    handle = undefined as never;
+  });
+
+  it("closes promptly even when a keep-alive client is still connected [ERR-03]", async () => {
+    handle = await startHttpServer(makeBootstrap());
+    const port = await waitForListen(handle.httpServer);
+    const agent = new http.Agent({ keepAlive: true });
+
+    try {
+      await new Promise<void>((resolve, reject) => {
+        const req = http.get({ host: "127.0.0.1", port, path: "/ready", agent }, (res) => {
+          res.resume();
+          res.on("end", resolve);
+        });
+        req.on("error", reject);
+      });
+
+      const closed = await Promise.race([
+        handle.close().then(() => true),
+        new Promise<boolean>((resolve) => setTimeout(() => resolve(false), 500)),
+      ]);
+
+      expect(closed).toBe(true);
+      handle = undefined as never;
+    } finally {
+      agent.destroy();
+    }
+  });
+
+  it("surfaces server.close callback failures during shutdown [QA-03]", async () => {
+    const fakeServer = {
+      listening: true,
+      address: () => ({ port: 41000 }),
+      on: () => fakeServer,
+      listen: (_port: number, _host: string, onListen?: () => void) => {
+        onListen?.();
+        return fakeServer;
+      },
+      closeIdleConnections: () => {},
+      close: (callback?: (err?: Error) => void) => {
+        callback?.(new Error("close failed"));
+        return fakeServer;
+      },
+      listenerCount: () => 1,
+    };
+
+    handle = await startHttpServer(makeBootstrap(), {
+      createNodeServer: () => fakeServer as unknown as http.Server,
+    });
+
+    await expect(handle.close()).rejects.toThrow("close failed");
+    handle = undefined as never;
   });
 });
 
@@ -578,14 +1163,7 @@ describe("POST /mcp auth + session validation", () => {
   });
 
   const initBody = {
-    jsonrpc: "2.0",
-    id: 1,
-    method: "initialize",
-    params: {
-      protocolVersion: "2025-03-26",
-      capabilities: {},
-      clientInfo: { name: "test", version: "1.0.0" },
-    },
+    ...initializeRequest,
   };
 
   it("returns 401 when Authorization header is missing and API key is configured", async () => {
@@ -596,7 +1174,7 @@ describe("POST /mcp auth + session validation", () => {
 
     const { status, body } = await httpPostJson(`http://127.0.0.1:${port}/mcp`, initBody);
     expect(status).toBe(401);
-    expect((body as { error: string }).error).toBe("Unauthorized");
+    expect(body).toEqual(jsonRpcError("Unauthorized"));
   });
 
   it("returns 401 when Bearer token is wrong", async () => {
@@ -692,7 +1270,91 @@ describe("POST /mcp auth + session validation", () => {
   });
 });
 
+describe("HTTP MCP method handling", () => {
+  let handle: Awaited<ReturnType<typeof startHttpServer>>;
+
+  afterEach(async () => {
+    await handle?.close();
+  });
+
+  it("accepts DELETE /mcp without requiring a session header [API-03]", async () => {
+    handle = await startHttpServer(makeBootstrap());
+    const port = await waitForListen(handle.httpServer);
+
+    const { status } = await httpRequestJson(`http://127.0.0.1:${port}/mcp`, { method: "DELETE" });
+
+    expect(status).toBe(200);
+  });
+
+  it("returns 405 with an Allow header for unsupported MCP methods [API-02]", async () => {
+    handle = await startHttpServer(makeBootstrap());
+    const port = await waitForListen(handle.httpServer);
+
+    const { status, body, headers } = await httpRequestJson(`http://127.0.0.1:${port}/mcp`, { method: "PUT" });
+
+    expect(status).toBe(405);
+    expect(headers.allow).toBe("POST, DELETE");
+    expect(body).toEqual(jsonRpcError("Method not allowed"));
+  });
+
+  it("returns a JSON-RPC 405 body for unsupported MCP methods [QA-04]", async () => {
+    let requestListener!: (req: http.IncomingMessage, res: http.ServerResponse) => void;
+    const fakeServer = {
+      listening: true,
+      address: () => ({ port: 41000 }),
+      on: () => fakeServer,
+      listen: (_port: number, _host: string, onListen?: () => void) => {
+        onListen?.();
+        return fakeServer;
+      },
+      closeIdleConnections: () => {},
+      close: (callback?: (err?: Error) => void) => {
+        callback?.();
+        return fakeServer;
+      },
+      listenerCount: () => 1,
+    };
+
+    handle = await startHttpServer(makeBootstrap(), {
+      createNodeServer: (listener) => {
+        requestListener = listener;
+        return fakeServer as unknown as http.Server;
+      },
+    });
+
+    const response = makeNodeResponseDouble();
+    let resolveResponse!: () => void;
+    const responseWritten = new Promise<void>((resolve) => {
+      resolveResponse = resolve;
+    });
+    const originalJson = response.res.json.bind(response.res);
+    response.res.json = ((body: unknown) => {
+      originalJson(body);
+      resolveResponse();
+    }) as typeof response.res.json;
+
+    requestListener(
+      {
+        method: "PUT",
+        url: "/mcp",
+        headers: { host: "127.0.0.1" },
+        on: () => undefined,
+      } as unknown as http.IncomingMessage,
+      response.res,
+    );
+    await responseWritten;
+
+    expect(response.res.statusCode).toBe(405);
+    expect(response.getHeaders().get("allow")).toBe("POST, DELETE");
+    expect(JSON.parse(response.getBody())).toEqual(jsonRpcError("Method not allowed"));
+  });
+});
+
 describe("handleExistingSessionRequest", () => {
+  afterEach(() => {
+    mock.restore();
+  });
+
   it("returns 500 when an existing session transport rejects", async () => {
     const entry = {
       transport: { handleRequest: mock().mockRejectedValue(new Error("transport failed")) },
@@ -711,7 +1373,77 @@ describe("handleExistingSessionRequest", () => {
     );
 
     expect(status).toHaveBeenCalledWith(500);
-    expect(json).toHaveBeenCalledWith({ error: "Internal server error" });
+    expect(json).toHaveBeenCalledWith(jsonRpcError("Internal server error"));
+  });
+
+  it("includes the requestId in existing-session error logs [ERR-04]", async () => {
+    spyOn(console, "error").mockImplementation(() => {});
+    const entry = {
+      transport: { handleRequest: mock().mockRejectedValue(new Error("transport failed")) },
+      server: { close: mock() },
+      lastActivityAt: 0,
+    };
+    const json = mock();
+    const status = mock().mockReturnValue({ json });
+    const res = { status, headersSent: false };
+
+    await handleExistingSessionRequest(
+      entry as unknown as Parameters<typeof handleExistingSessionRequest>[0],
+      {} as unknown as Parameters<typeof handleExistingSessionRequest>[1],
+      res as unknown as Parameters<typeof handleExistingSessionRequest>[2],
+      {},
+      "req-http-04",
+    );
+
+    expect(console.error).toHaveBeenCalledWith(
+      "[http]",
+      "existing session transport error",
+      expect.objectContaining({ err: "transport failed", requestId: "req-http-04" }),
+    );
+  });
+
+  it("does not attempt a second response after headers have been sent [QA-01]", async () => {
+    const entry = {
+      transport: { handleRequest: mock().mockRejectedValue(new Error("transport failed")) },
+      server: { close: mock() },
+      lastActivityAt: 0,
+    };
+    const json = mock();
+    const status = mock().mockReturnValue({ json });
+    const res = { status, headersSent: true };
+
+    await handleExistingSessionRequest(
+      entry as unknown as Parameters<typeof handleExistingSessionRequest>[0],
+      {} as unknown as Parameters<typeof handleExistingSessionRequest>[1],
+      res as unknown as Parameters<typeof handleExistingSessionRequest>[2],
+      {},
+    );
+
+    expect(status).not.toHaveBeenCalled();
+    expect(json).not.toHaveBeenCalled();
+  });
+});
+
+describe("handleNewSessionTransportError", () => {
+  it("returns JSON 500 instead of rethrowing to Express [ERR-07]", async () => {
+    const sessions = new Map<string, unknown>([["session-1", {}]]);
+    const close = mock().mockResolvedValue(undefined);
+    const json = mock();
+    const status = mock().mockReturnValue({ json });
+    const res = { status, headersSent: false };
+
+    await handleNewSessionTransportError(
+      "session-1",
+      sessions,
+      { close },
+      res as unknown as Parameters<typeof handleNewSessionTransportError>[3],
+      new Error("transport failed"),
+    );
+
+    expect(sessions.has("session-1")).toBe(false);
+    expect(close).toHaveBeenCalled();
+    expect(status).toHaveBeenCalledWith(500);
+    expect(json).toHaveBeenCalledWith(jsonRpcError("Internal server error"));
   });
 });
 
@@ -732,26 +1464,62 @@ describe("closeActiveSessionsForShutdown", () => {
   });
 });
 
-describe("GET /health unauthenticated response shape", () => {
-  let handle: Awaited<ReturnType<typeof startHttpServer>>;
+describe("createInFlightRequestTracker", () => {
+  it("waits for tracked requests to settle before draining [ARCH-02]", async () => {
+    const tracker = createInFlightRequestTracker();
+    let releaseRequest!: () => void;
+    let drained = false;
 
-  afterEach(async () => {
-    await handle?.close();
+    const request = tracker.track(
+      new Promise<void>((resolve) => {
+        releaseRequest = resolve;
+      }),
+    );
+    const drainPromise = tracker.drain().then(() => {
+      drained = true;
+    });
+
+    await Promise.resolve();
+    expect(drained).toBe(false);
+
+    releaseRequest();
+    await request;
+    await drainPromise;
+
+    expect(drained).toBe(true);
   });
+});
 
-  it("returns stripped response (no vaults/circuits/sessions) when API key is set and token is missing", async () => {
-    const boot = makeBootstrap();
-    boot.config.mcpApiKey = "secret";
-    handle = await startHttpServer(boot);
-    const port = await waitForListen(handle.httpServer);
+describe("createUnrefedTimeoutPromise", () => {
+  it("calls unref on timeout handles when available [ERR-07]", async () => {
+    const originalSetTimeout = globalThis.setTimeout;
+    const unref = mock();
 
-    const { status, body } = await httpGet(`http://127.0.0.1:${port}/health`);
-    expect(status).toBe(200);
-    const b = body as Record<string, unknown>;
-    expect(b["status"]).toBe("ok");
-    expect(b["vaults"]).toBeUndefined();
-    expect(b["circuits"]).toBeUndefined();
-    expect(b["sessions"]).toBeUndefined();
+    globalThis.setTimeout = ((fn: TimerHandler) => {
+      const handle = { unref } as unknown as ReturnType<typeof setTimeout>;
+      queueMicrotask(() => {
+        if (typeof fn === "function") fn();
+      });
+      return handle;
+    }) as typeof setTimeout;
+
+    try {
+      await expect(createUnrefedTimeoutPromise(50, false)).resolves.toBe(false);
+    } finally {
+      globalThis.setTimeout = originalSetTimeout;
+    }
+
+    expect(unref).toHaveBeenCalledOnce();
+  });
+});
+
+describe("GET /health unauthenticated response shape", () => {
+  it("retains the sessions field in the public health payload [API-04]", () => {
+    expect(buildPublicHealthResponse(12, 0)).toEqual({
+      status: "ok",
+      uptimeSeconds: 12,
+      sessions: 0,
+    });
   });
 });
 
@@ -776,5 +1544,54 @@ describe("parsePositiveIntEnv", () => {
       process.env[envName] = value;
       expect(() => parsePositiveIntEnv(envName, 123)).toThrow(/positive integer/);
     }
+  });
+});
+
+describe("MCP_HTTP_BODY_LIMIT_BYTES", () => {
+  const envName = "MCP_HTTP_BODY_LIMIT_BYTES";
+  const originalValue = process.env[envName];
+
+  afterEach(() => {
+    if (originalValue === undefined) delete process.env[envName];
+    else process.env[envName] = originalValue;
+  });
+
+  it("applies the env var through startHttpServer when opts.bodyLimitBytes is unset [QA-05]", async () => {
+    process.env[envName] = "64";
+    let requestListener!: (req: http.IncomingMessage, res: http.ServerResponse) => void;
+    const writeHead = mock();
+    const end = mock();
+    const fakeServer = {
+      listening: true,
+      address: () => ({ port: 41000 }),
+      on: () => fakeServer,
+      listen: (_port: number, _host: string, onListen?: () => void) => {
+        onListen?.();
+        return fakeServer;
+      },
+      closeIdleConnections: () => {},
+      close: (callback?: (err?: Error) => void) => {
+        callback?.();
+        return fakeServer;
+      },
+      listenerCount: () => 1,
+    };
+
+    const handle = await startHttpServer(makeBootstrap(), {
+      createNodeServer: (listener) => {
+        requestListener = listener;
+        return fakeServer as unknown as http.Server;
+      },
+    });
+
+    requestListener(
+      { headers: { "content-length": "128" } } as unknown as http.IncomingMessage,
+      { writeHead, end } as unknown as http.ServerResponse,
+    );
+
+    expect(writeHead).toHaveBeenCalledWith(413, { "content-type": "application/json" });
+    expect(end).toHaveBeenCalledWith(JSON.stringify({ error: "Payload too large" }));
+
+    await handle.close();
   });
 });

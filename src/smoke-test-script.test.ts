@@ -46,4 +46,61 @@ describe("smoke test helpers", () => {
 
     expect(env).toEqual({ PATH: "/usr/bin", HOME: "/tmp/home", OBSIDIAN_VAULT_PATH: "/tmp/vault", MCP_PORT: "3783" });
   });
+
+  it("covers tool error envelopes in the integration test [API-05]", () => {
+    const script = fs.readFileSync(path.join(process.cwd(), "scripts/integration-test.ts"), "utf8");
+
+    expect(script).toContain("callToolExpectError");
+    expect(script).toContain("vault_read_note (missing note error contract)");
+    expect(script).toContain("NOT_FOUND");
+  });
+
+  it("probes readiness before sleeping in the integration test [PERF-06]", () => {
+    const script = fs.readFileSync(path.join(process.cwd(), "scripts/integration-test.ts"), "utf8");
+
+    expect(script).not.toContain('await Bun.sleep(500);\n  process.stdout.write(".");');
+    expect(script).toContain('process.stdout.write(".");\n  await Bun.sleep(500);');
+  });
+
+  it("does not use vacuous optional item assertions in the integration test [QA-06]", () => {
+    const script = fs.readFileSync(path.join(process.cwd(), "scripts/integration-test.ts"), "utf8");
+
+    expect(script).not.toContain("!items?.some");
+  });
+
+  it("asserts semantic vault_classify output in the integration test [QA-07]", () => {
+    const script = fs.readFileSync(path.join(process.cwd(), "scripts/integration-test.ts"), "utf8");
+
+    expect(script).toContain('assertEqual(d.suggested_folder, "10_Projects"');
+    expect(script).toContain('assertTruthy(d.tags?.includes("project")');
+  });
+
+  it("verifies the original path is absent after move in the integration test [QA-11]", () => {
+    const script = fs.readFileSync(path.join(process.cwd(), "scripts/integration-test.ts"), "utf8");
+
+    expect(script).toContain("vault_read_note (verify original path absent after move)");
+    expect(script).toContain('callToolExpectError("vault_read_note", { path: "test-write" }, "NOT_FOUND")');
+  });
+
+  it("keeps raw SSE response text on integration parse failures [ERR-04]", () => {
+    const script = fs.readFileSync(path.join(process.cwd(), "scripts/smoke-test-lib.ts"), "utf8");
+
+    expect(script).toContain("Raw response:");
+  });
+
+  it("rejects non-numeric INTEGRATION_TEST_PORT before writing .env [SEC-02]", () => {
+    const script = fs.readFileSync(path.join(process.cwd(), "scripts/integration-test.ts"), "utf8");
+
+    expect(script).toContain("INTEGRATION_TEST_PORT must be a number");
+  });
+
+  it("reuses shared SSE parsing and log draining helpers in the integration test [QA-09]", () => {
+    const script = fs.readFileSync(path.join(process.cwd(), "scripts/integration-test.ts"), "utf8");
+
+    expect(script).toContain('from "./smoke-test-lib.js"');
+    expect(script).toContain("parseSseResponse");
+    expect(script).toContain("drainTextStream");
+    expect(script).not.toContain("function parseSse(");
+    expect(script).not.toContain("const drainLog =");
+  });
 });

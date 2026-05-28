@@ -21,4 +21,41 @@ describe("documented test commands", () => {
     expect(installation).toContain("~/.config/vault-mcp/.env");
     expect(installation).toContain("~/Library/Logs/vault-mcp/vault-mcp.err");
   });
+
+  it("covers confirmed hard delete in the integration script [QA-02]", () => {
+    const integration = fs.readFileSync(path.join(process.cwd(), "scripts/integration-test.ts"), "utf8");
+
+    expect(integration).toContain("trash: false");
+    expect(integration).toContain("confirm: true");
+    expect(integration).toContain("hard-deleted note absent");
+  });
+
+  it("verifies soft-delete trashName and .trash location in the integration script [QA-03]", () => {
+    const integration = fs.readFileSync(path.join(process.cwd(), "scripts/integration-test.ts"), "utf8");
+
+    expect(integration).toContain("trashName");
+    expect(integration).toContain('join(vaultPath, ".trash"');
+  });
+
+  it("reports binary crashes distinctly during integration tool calls [QA-04]", () => {
+    const integration = fs.readFileSync(path.join(process.cwd(), "scripts/integration-test.ts"), "utf8");
+
+    expect(integration).toContain("binary exited during");
+    expect(integration).toContain("getBinaryExitCode");
+  });
+
+  it("sends MCP notifications/initialized in the integration script [ARCH-03]", () => {
+    const integration = fs.readFileSync(path.join(process.cwd(), "scripts/integration-test.ts"), "utf8");
+
+    expect(integration).toContain('"notifications/initialized"');
+    expect(integration).toContain("OK  notifications/initialized");
+  });
+
+  it("cleans up the spawned binary on integration script signals [ARCH-04]", () => {
+    const integration = fs.readFileSync(path.join(process.cwd(), "scripts/integration-test.ts"), "utf8");
+
+    expect(integration).toContain('process.on("SIGINT"');
+    expect(integration).toContain('process.on("SIGTERM"');
+    expect(integration).toContain("cleanupAndExit");
+  });
 });
