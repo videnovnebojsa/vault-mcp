@@ -102,7 +102,9 @@ describe("shutdownOtel — timeout branch [QA-05]", () => {
 
     const shutdownPromise = shutdownOtel();
 
-    // Drain microtasks so the Promise.race starts
+    // Deterministic via fake timers — fully controls the production shutdownOtel() Promise.race
+    // (the 5s timeout). NOT the flaky real-time pattern of PERF-01; do not "fix" it into one.
+    // Drain microtasks so the Promise.race starts, then advance past the timeout.
     for (let i = 0; i < 10; i++) await Promise.resolve();
     jest.advanceTimersByTime(5001);
     for (let i = 0; i < 10; i++) await Promise.resolve();

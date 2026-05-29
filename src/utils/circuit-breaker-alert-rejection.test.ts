@@ -15,25 +15,28 @@ afterEach(() => {
   configureCircuitBreakerAlerts("");
 });
 
-function nextTick(): Promise<"handled"> {
-  return new Promise((resolve) => setTimeout(() => resolve("handled"), 0));
-}
-
 describe("CircuitBreaker alert failures", () => {
   it("does not produce an unhandled rejection when fire-and-forget alerting fails [ERR-05]", async () => {
     const cb = new CircuitBreaker("test", { failureThreshold: 1 });
-    const unhandled = new Promise<"unhandled">((resolve) => {
-      process.once("unhandledRejection", () => resolve("unhandled"));
-    });
+    let unhandledReason: unknown = null;
+    const onUnhandled = (reason: unknown) => {
+      unhandledReason = reason;
+    };
+    process.on("unhandledRejection", onUnhandled);
+    try {
+      await expect(
+        cb.execute(async () => {
+          throw new Error("fail");
+        }),
+      ).rejects.toThrow("fail");
 
-    await expect(
-      cb.execute(async () => {
-        throw new Error("fail");
-      }),
-    ).rejects.toThrow("fail");
+      // Turn the event loop once so any mishandled fire-and-forget alert rejection surfaces.
+      await new Promise((resolve) => setTimeout(resolve, 0));
 
-    const outcome = await Promise.race([unhandled, nextTick()]);
-    expect(outcome).toBe("handled");
-    expect(globalThis.fetch).toHaveBeenCalled();
+      expect(unhandledReason).toBeNull();
+      expect(globalThis.fetch).toHaveBeenCalled();
+    } finally {
+      process.removeListener("unhandledRejection", onUnhandled);
+    }
   });
 });
