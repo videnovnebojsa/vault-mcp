@@ -6,7 +6,7 @@
 
 MCP server that gives your agent direct, always-on access to your Obsidian vault - no plugin, no Obsidian process required.
 
-Ask Claude to find everything you've written about a topic, draft a note in the right folder, or triage your inbox - without ever opening Obsidian.
+Ask Claude (or any other agent) to find everything you've written about a topic, draft a note in the right folder, or triage your inbox - without ever opening Obsidian.
 
 ## Why vault-mcp?
 
@@ -167,9 +167,14 @@ To edit the file by hand instead, open `~/.config/vault-mcp/.env` and restart th
 ```bash
 bun run test                      # run test suite
 bun run build                     # compile TypeScript → dist/
+bun run lint                      # biome check
+```
+
+**Binary build scripts** (require Bun):
+
+```bash
 bun run build:bun                 # standalone executable → dist-bin/
 bun run scripts/smoke-test.ts     # smoke test the built binary against a real vault
-bun run lint                      # biome check
 ```
 
 ## Documentation
