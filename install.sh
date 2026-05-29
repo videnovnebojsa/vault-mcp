@@ -175,14 +175,15 @@ fi
 
 mkdir -p "$CFG_DIR"
 header "Configuration"
-printf "Settings file: ${CYAN}${CFG_FILE}${RESET}\n\n"
+printf "Settings file: ${CYAN}${CFG_FILE}${RESET}\n"
+printf "${YELLOW}Tip:${RESET} leave any optional field empty to skip — run ${CYAN}bash install.sh --configure${RESET} anytime to fill them in later.\n\n"
 
 # Vault path (required)
 CURRENT_VAULT="$(cfg_get OBSIDIAN_VAULT_PATH)"
 if [ -n "$CURRENT_VAULT" ]; then
-  ask "Vault path [${CURRENT_VAULT}]: "
+  ask "Enter vault path [Default: ${CURRENT_VAULT}]: "
 else
-  ask "Vault path (e.g. ~/Documents/obsidian): "
+  ask "Enter vault path (e.g. ~/Documents/obsidian): "
 fi
 read_input INPUT_VAULT
 VAULT_PATH="${INPUT_VAULT:-${CURRENT_VAULT:-}}"
@@ -193,7 +194,7 @@ VAULT_PATH="${VAULT_PATH/#\~/$HOME}"          # expand leading ~
 # Port
 CURRENT_PORT="$(cfg_get MCP_PORT)"
 DEFAULT_PORT="${CURRENT_PORT:-3782}"
-ask "Port [${DEFAULT_PORT}]: "
+ask "Enter port [Default: ${DEFAULT_PORT}]: "
 read_input INPUT_PORT
 MCP_PORT="${INPUT_PORT:-${DEFAULT_PORT}}"
 { [[ "$MCP_PORT" =~ ^[0-9]+$ ]] && [ "$MCP_PORT" -ge 1 ] && [ "$MCP_PORT" -le 65535 ]; } \
@@ -202,11 +203,11 @@ MCP_PORT="${INPUT_PORT:-${DEFAULT_PORT}}"
 # API key (optional)
 CURRENT_KEY="$(cfg_get MCP_API_KEY)"
 if [ -n "$CURRENT_KEY" ]; then
-  ask "API key [leave blank to keep current]: "
+  ask "Enter API key [leave blank to keep current]: "
   read_input INPUT_KEY
   MCP_API_KEY="${INPUT_KEY:-${CURRENT_KEY}}"
 else
-  ask "API key (optional — leave empty for local-only): "
+  ask "Enter API key (optional — leave blank for local-only): "
   read_input MCP_API_KEY
 fi
 
@@ -214,7 +215,7 @@ fi
 CURRENT_EMB="$(cfg_get ENABLE_EMBEDDINGS)"
 CURRENT_EMB="${CURRENT_EMB:-false}"
 if [ "$CURRENT_EMB" = "true" ]; then
-  ask "Keep vector embeddings enabled? [Y/n]: "
+  ask "Keep vector embeddings enabled? [Y/n] (press Enter to keep): "
   read_input INPUT_EMB
   INPUT_EMB_LOWER="$(printf '%s' "$INPUT_EMB" | tr '[:upper:]' '[:lower:]')"
   if [ "$INPUT_EMB_LOWER" = "n" ] || [ "$INPUT_EMB_LOWER" = "no" ]; then
@@ -223,7 +224,7 @@ if [ "$CURRENT_EMB" = "true" ]; then
     ENABLE_EMBEDDINGS="true"
   fi
 else
-  ask "Enable vector embeddings? [y/N]: "
+  ask "Enable vector embeddings? [y/N] (press Enter to skip): "
   read_input INPUT_EMB
   INPUT_EMB_LOWER="$(printf '%s' "$INPUT_EMB" | tr '[:upper:]' '[:lower:]')"
   if [ "$INPUT_EMB_LOWER" = "y" ] || [ "$INPUT_EMB_LOWER" = "yes" ]; then
@@ -238,16 +239,16 @@ EMBEDDINGS_API_KEY=""
 if [ "$ENABLE_EMBEDDINGS" = "true" ]; then
   CURRENT_EMB_URL="$(cfg_get EMBEDDING_ENDPOINT)"
   DEFAULT_EMB_URL="${CURRENT_EMB_URL:-https://api.openai.com/v1}"
-  ask "Embeddings endpoint [${DEFAULT_EMB_URL}]: "
+  ask "Enter embeddings endpoint [Default: ${DEFAULT_EMB_URL}]: "
   read_input INPUT_EMB_URL
   EMBEDDINGS_ENDPOINT="${INPUT_EMB_URL:-${DEFAULT_EMB_URL}}"
   CURRENT_EMB_KEY="$(cfg_get EMBEDDING_API_KEY)"
   if [ -n "$CURRENT_EMB_KEY" ]; then
-    ask "Embeddings API key [leave blank to keep current]: "
+    ask "Enter embeddings API key [leave blank to keep current]: "
     read_input INPUT_EMB_KEY
     EMBEDDINGS_API_KEY="${INPUT_EMB_KEY:-${CURRENT_EMB_KEY}}"
   else
-    ask "Embeddings API key: "
+    ask "Enter embeddings API key (leave empty to skip): "
     read_input EMBEDDINGS_API_KEY
   fi
 fi
@@ -295,7 +296,7 @@ if [ "$OS" = "Darwin" ]; then
       || { launchctl unload "$PLIST_FILE" 2>/dev/null; launchctl load "$PLIST_FILE"; }
     ok "Service restarted with new config"
   else
-    ask "Install as a background service (auto-starts at login)? [Y/n]: "
+    ask "Install as a background service (auto-starts at login)? [Y/n] (press Enter for yes): "
     read_input INSTALL_SERVICE
     INSTALL_SERVICE_LOWER="$(printf '%s' "$INSTALL_SERVICE" | tr '[:upper:]' '[:lower:]')"
     if [ "$INSTALL_SERVICE_LOWER" != "n" ] && [ "$INSTALL_SERVICE_LOWER" != "no" ]; then
@@ -346,7 +347,7 @@ elif [ "$OS" = "Linux" ]; then
     systemctl --user restart vault-mcp
     ok "Service restarted with new config"
   else
-    ask "Install as a background service (auto-starts at login)? [Y/n]: "
+    ask "Install as a background service (auto-starts at login)? [Y/n] (press Enter for yes): "
     read_input INSTALL_SERVICE
     INSTALL_SERVICE_LOWER="$(printf '%s' "$INSTALL_SERVICE" | tr '[:upper:]' '[:lower:]')"
     if [ "$INSTALL_SERVICE_LOWER" != "n" ] && [ "$INSTALL_SERVICE_LOWER" != "no" ]; then
