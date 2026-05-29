@@ -35,7 +35,19 @@ ok()      { printf "${GREEN}✔${RESET} %s\n" "$*"; }
 warn()    { printf "${YELLOW}⚠${RESET} %s\n" "$*"; }
 die()     { printf "${RED}✘ Error:${RESET} %s\n" "$*" >&2; exit 1; }
 header()  { printf "\n${BOLD}%s${RESET}\n%s\n" "$1" "$(printf '─%.0s' $(seq 1 ${#1}))"; }
-ask()     { printf "${BOLD}%s${RESET}" "$*"; }  # no newline — caller uses read
+ask()     { printf "${BOLD}%s${RESET}" "$*"; }  # no newline — caller uses read_input
+# When run as `curl | sh` the shell reads the script from stdin, so user input must
+# come from /dev/tty. When run as `bash install.sh` (including piped tests) stdin is
+# free for user input. We distinguish by checking whether $0 resolves to a real file.
+_STDIN_IS_SCRIPT=false
+[ ! -t 0 ] && [ ! -f "$0" ] && _STDIN_IS_SCRIPT=true
+read_input() {
+  if [ "$_STDIN_IS_SCRIPT" = true ]; then
+    read -r "$1" < /dev/tty
+  else
+    read -r "$1"
+  fi
+}
 env_quote() {
   local value="$1"
   value="${value//\\/\\\\}"
@@ -120,16 +132,6 @@ if [ "$CONFIGURE_ONLY" = false ]; then
       die "curl or wget is required but neither was found"
     fi
 
-    # ─── Step 2a: Redirect stdin from /dev/tty when piped (e.g. curl | sh) ────
-    # Without this, all `read` prompts return immediately with empty string.
-    if [ ! -t 0 ]; then
-      if [ -e /dev/tty ]; then
-        exec < /dev/tty
-      else
-        die "No interactive terminal available. Download and run the script directly:\n  bash <(curl -fsSL https://raw.githubusercontent.com/${REPO}/main/install.sh)"
-      fi
-    fi
-
     # ─── Step 3: Get latest release tag ───────────────────────────────────────
     info "Checking latest release..."
     LATEST_TAG=$(fetch "https://api.github.com/repos/${REPO}/releases/latest" \
@@ -182,7 +184,7 @@ if [ -n "$CURRENT_VAULT" ]; then
 else
   ask "Vault path (e.g. ~/Documents/obsidian): "
 fi
-read -r INPUT_VAULT
+read_input INPUT_VAULT
 VAULT_PATH="${INPUT_VAULT:-${CURRENT_VAULT:-}}"
 [ -n "$VAULT_PATH" ] || die "Vault path is required"
 VAULT_PATH="${VAULT_PATH/#\~/$HOME}"          # expand leading ~
@@ -192,7 +194,7 @@ VAULT_PATH="${VAULT_PATH/#\~/$HOME}"          # expand leading ~
 CURRENT_PORT="$(cfg_get MCP_PORT)"
 DEFAULT_PORT="${CURRENT_PORT:-3782}"
 ask "Port [${DEFAULT_PORT}]: "
-read -r INPUT_PORT
+read_input INPUT_PORT
 MCP_PORT="${INPUT_PORT:-${DEFAULT_PORT}}"
 { [[ "$MCP_PORT" =~ ^[0-9]+$ ]] && [ "$MCP_PORT" -ge 1 ] && [ "$MCP_PORT" -le 65535 ]; } \
   || die "Port must be a number between 1 and 65535"
@@ -201,11 +203,11 @@ MCP_PORT="${INPUT_PORT:-${DEFAULT_PORT}}"
 CURRENT_KEY="$(cfg_get MCP_API_KEY)"
 if [ -n "$CURRENT_KEY" ]; then
   ask "API key [leave blank to keep current]: "
-  read -r INPUT_KEY
+  read_input INPUT_KEY
   MCP_API_KEY="${INPUT_KEY:-${CURRENT_KEY}}"
 else
   ask "API key (optional — leave empty for local-only): "
-  read -r MCP_API_KEY
+  read_input MCP_API_KEY
 fi
 
 # Embeddings (optional)
@@ -213,7 +215,7 @@ CURRENT_EMB="$(cfg_get ENABLE_EMBEDDINGS)"
 CURRENT_EMB="${CURRENT_EMB:-false}"
 if [ "$CURRENT_EMB" = "true" ]; then
   ask "Keep vector embeddings enabled? [Y/n]: "
-  read -r INPUT_EMB
+  read_input INPUT_EMB
   INPUT_EMB_LOWER="$(printf '%s' "$INPUT_EMB" | tr '[:upper:]' '[:lower:]')"
   if [ "$INPUT_EMB_LOWER" = "n" ] || [ "$INPUT_EMB_LOWER" = "no" ]; then
     ENABLE_EMBEDDINGS="false"
@@ -222,7 +224,7 @@ if [ "$CURRENT_EMB" = "true" ]; then
   fi
 else
   ask "Enable vector embeddings? [y/N]: "
-  read -r INPUT_EMB
+  read_input INPUT_EMB
   INPUT_EMB_LOWER="$(printf '%s' "$INPUT_EMB" | tr '[:upper:]' '[:lower:]')"
   if [ "$INPUT_EMB_LOWER" = "y" ] || [ "$INPUT_EMB_LOWER" = "yes" ]; then
     ENABLE_EMBEDDINGS="true"
@@ -237,16 +239,16 @@ if [ "$ENABLE_EMBEDDINGS" = "true" ]; then
   CURRENT_EMB_URL="$(cfg_get EMBEDDING_ENDPOINT)"
   DEFAULT_EMB_URL="${CURRENT_EMB_URL:-https://api.openai.com/v1}"
   ask "Embeddings endpoint [${DEFAULT_EMB_URL}]: "
-  read -r INPUT_EMB_URL
+  read_input INPUT_EMB_URL
   EMBEDDINGS_ENDPOINT="${INPUT_EMB_URL:-${DEFAULT_EMB_URL}}"
   CURRENT_EMB_KEY="$(cfg_get EMBEDDING_API_KEY)"
   if [ -n "$CURRENT_EMB_KEY" ]; then
     ask "Embeddings API key [leave blank to keep current]: "
-    read -r INPUT_EMB_KEY
+    read_input INPUT_EMB_KEY
     EMBEDDINGS_API_KEY="${INPUT_EMB_KEY:-${CURRENT_EMB_KEY}}"
   else
     ask "Embeddings API key: "
-    read -r EMBEDDINGS_API_KEY
+    read_input EMBEDDINGS_API_KEY
   fi
 fi
 
@@ -294,7 +296,7 @@ if [ "$OS" = "Darwin" ]; then
     ok "Service restarted with new config"
   else
     ask "Install as a background service (auto-starts at login)? [Y/n]: "
-    read -r INSTALL_SERVICE
+    read_input INSTALL_SERVICE
     INSTALL_SERVICE_LOWER="$(printf '%s' "$INSTALL_SERVICE" | tr '[:upper:]' '[:lower:]')"
     if [ "$INSTALL_SERVICE_LOWER" != "n" ] && [ "$INSTALL_SERVICE_LOWER" != "no" ]; then
       mkdir -p "$PLIST_DIR" "$LOG_DIR"
@@ -345,7 +347,7 @@ elif [ "$OS" = "Linux" ]; then
     ok "Service restarted with new config"
   else
     ask "Install as a background service (auto-starts at login)? [Y/n]: "
-    read -r INSTALL_SERVICE
+    read_input INSTALL_SERVICE
     INSTALL_SERVICE_LOWER="$(printf '%s' "$INSTALL_SERVICE" | tr '[:upper:]' '[:lower:]')"
     if [ "$INSTALL_SERVICE_LOWER" != "n" ] && [ "$INSTALL_SERVICE_LOWER" != "no" ]; then
       mkdir -p "$SYSTEMD_DIR"
