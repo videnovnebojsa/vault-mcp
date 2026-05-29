@@ -4,6 +4,18 @@ All notable changes to this project will be documented in this file.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.2] - 2026-05-29
+
+### Added
+- `vault-mcp bridge` subcommand — enables Claude Desktop integration via stdio without extra dependencies
+
+### Fixed
+- `curl | sh` install hang: use per-read `/dev/tty` redirect instead of `exec` so the script continues reading from the pipe
+- Install prompts now actionable ("Enter vault path", "Default: X") with tip to rerun `--configure` for skipped fields
+- Install output now includes ready-to-paste Claude Desktop config snippet
+
+[0.1.2]: https://github.com/videnovnebojsa/vault-mcp/compare/v0.1.1...v0.1.2
+
 ## [0.1.1] - 2026-05-29
 
 ### Fixed
