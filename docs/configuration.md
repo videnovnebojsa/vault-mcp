@@ -1,13 +1,13 @@
 # Configuration
 
-All configuration is via environment variables. Zero required configuration — the defaults work for a local single-vault setup.
+All configuration is via environment variables. Zero required configuration - the defaults work for a local single-vault setup.
 
 ## Vault Paths
 
 | Variable | Default | Description |
 |---|---|---|
 | `OBSIDIAN_VAULT_PATH` | `~/Documents/obsidian` | Path to your primary Obsidian vault |
-| `VAULT_PATHS` | _(empty)_ | Named additional vaults — semicolon-separated `name:path` pairs, e.g. `work:~/vaults/work;archive:~/vaults/archive` |
+| `VAULT_PATHS` | _(empty)_ | Named additional vaults - semicolon-separated `name:path` pairs, e.g. `work:~/vaults/work;archive:~/vaults/archive` |
 | `MEMORY_DB_PATH` | `{vault}/.vault-search.db` | Path to the SQLite search index (per vault) |
 
 ## HTTP Server

@@ -19,9 +19,9 @@ Open a [bug report issue](https://github.com/videnovnebojsa/vault-mcp/issues/new
 
 - What you did, what you expected, what happened instead
 - Your OS, Bun version (`bun --version`), and how you connect (Claude Code / Claude Desktop / other)
-- Relevant logs — the server writes structured JSON logs; pipe them through `jq` if needed
+- Relevant logs - the server writes structured JSON logs; pipe them through `jq` if needed
 
-For security vulnerabilities, **do not open a public issue** — see [SECURITY.md](.github/SECURITY.md).
+For security vulnerabilities, **do not open a public issue** - see [SECURITY.md](.github/SECURITY.md).
 
 ## Suggesting features
 
@@ -82,10 +82,10 @@ These also run automatically via Lefthook at pre-commit (`biome check --write` o
 3. **Follow the layer boundaries** (see [Architecture](docs/contributing/architecture.md)):
    - Handlers (`mcp/handlers/`) contain business logic, return `ToolResult`, never catch errors
    - Services (`vault/`, `search/`, `capture/`) are called by handlers
-   - `mcp/tools.ts` is the only wiring point — don't add I/O wiring elsewhere
+   - `mcp/tools.ts` is the only wiring point - don't add I/O wiring elsewhere
    - Throw `VaultError` with a `VaultErrorCode`; `wrapHandler` handles the rest
 
-4. **Write tests.** Handler tests use `MockVaultRepository` from `mcp/handlers/test-helpers.ts` and run against in-memory SQLite — no real filesystem. Store tests use `new VaultSearchStore()` with `:memory:`. Coverage must stay ≥ 80%.
+4. **Write tests.** Handler tests use `MockVaultRepository` from `mcp/handlers/test-helpers.ts` and run against in-memory SQLite - no real filesystem. Store tests use `new VaultSearchStore()` with `:memory:`. Coverage must stay ≥ 80%.
 
 5. **Add or update docs** if your change affects user-facing behavior (new tool, config option, changed response shape).
 
@@ -120,14 +120,14 @@ Enforced by commitlint at commit time. Merge commits and revert commits are exem
 
 ### TypeScript
 
-- Strict mode is on — no `any`, no `ts-ignore` without a comment explaining why
+- Strict mode is on - no `any`, no `ts-ignore` without a comment explaining why
 - Prefer explicit return types on exported functions
-- Response shapes come from `mcp/format.ts` helpers (`successResult`, `listResult`, `errorResult`) — don't hand-roll envelopes
+- Response shapes come from `mcp/format.ts` helpers (`successResult`, `listResult`, `errorResult`) - don't hand-roll envelopes
 
 ### Error handling
 
 - Throw `VaultError` (from `utils/errors.ts`) with an appropriate `VaultErrorCode`
-- Never `console.error` — use the structured `logger`
+- Never `console.error` - use the structured `logger`
 - Never catch inside a handler unless you're intentionally swallowing a per-item failure (see `note-with-links.ts` for the pattern)
 
 ### Folder name constants

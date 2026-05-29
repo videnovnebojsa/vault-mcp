@@ -7,7 +7,7 @@
 ## Commands
 
 ```bash
-bun test --isolate                    # required — avoids env pollution between test files
+bun test --isolate                    # required - avoids env pollution between test files
 bun test --isolate --reporter=dots    # compact output
 bun test src/mcp/handlers/search.test.ts  # single file
 bun test -t "test name"              # single test

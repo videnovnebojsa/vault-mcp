@@ -4,7 +4,7 @@ These rules apply to every change in this repo.
 
 ## 1. Think before coding
 
-Before writing any code, identify which layer owns the concern (transport / tool wiring / handler / service). If the right layer is unclear, stop and ask — don't guess.
+Before writing any code, identify which layer owns the concern (transport / tool wiring / handler / service). If the right layer is unclear, stop and ask - don't guess.
 
 ## 2. Simplicity first
 
@@ -22,7 +22,7 @@ Before marking work done: `bun run check:types` passes, `bun test --isolate` pas
 
 1. Create `src/mcp/handlers/<tool>.ts` + `<tool>.test.ts`
 2. Register with `wrapHandler` in `src/mcp/tools.ts` using `getSvc(args.vault)`
-3. Use `successResult` / `listResult` from `src/mcp/format.ts` — never raw JSON
+3. Use `successResult` / `listResult` from `src/mcp/format.ts` - never raw JSON
 4. Use `VAULT_FOLDERS` constants for any folder name references
 5. Use `toClientNote()` before including a `VaultNote` in any response
 6. Do not catch errors in the handler unless per-item fallback is intentional

@@ -39,9 +39,9 @@ If you set `MCP_API_KEY`, add it as a header:
 
 Claude Desktop uses stdio (not HTTP), so connect it via the included stdio bridge. The bridge is a lightweight process that translates between stdio JSON-RPC and the HTTP server.
 
-**Step 1** — make sure the vault-mcp HTTP server is running (see [installation.md](installation.md)).
+**Step 1** - make sure the vault-mcp HTTP server is running (see [installation.md](installation.md)).
 
-**Step 2** — add to `claude_desktop_config.json`:
+**Step 2** - add to `claude_desktop_config.json`:
 
 ```json
 {
@@ -82,7 +82,7 @@ With an API key:
 
 ## Using Claude Code and Claude Desktop simultaneously
 
-Both clients connect to the same HTTP server and share the same vault index. No extra configuration is needed — just start the server once and configure each client to point to it.
+Both clients connect to the same HTTP server and share the same vault index. No extra configuration is needed - just start the server once and configure each client to point to it.
 
 ---
 

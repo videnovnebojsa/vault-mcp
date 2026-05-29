@@ -4,7 +4,17 @@ All notable changes to this project will be documented in this file.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.1.0] — 2026-05-27
+## [0.1.1] - 2026-05-29
+
+### Fixed
+- Remove invalid pattern input from shellcheck CI job; pin artifact action SHAs
+- Resolve 34 issues across security, API contracts, error handling, architecture, QA, and performance (VERIFICATION.md audit)
+- Apply deep review findings from c1 sprint
+- Bump actions/checkout to v5 for Node.js 24 compatibility
+
+[0.1.1]: https://github.com/videnovnebojsa/vault-mcp/compare/v0.1.0...v0.1.1
+
+## [0.1.0] - 2026-05-27
 
 ### Added
 - Production-grade MCP server for Obsidian vaults over HTTP and stdio bridge

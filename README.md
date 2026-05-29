@@ -4,47 +4,59 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Bun ≥ 1.3](https://img.shields.io/badge/bun-%E2%89%A51.3-black?logo=bun&logoColor=white)](https://bun.sh)
 
-MCP server that gives your agent direct, always-on access to your Obsidian vault — no plugin, no Obsidian process required.
+MCP server that gives your agent direct, always-on access to your Obsidian vault - no plugin, no Obsidian process required.
+
+Ask Claude to find everything you've written about a topic, draft a note in the right folder, or triage your inbox - without ever opening Obsidian.
 
 ## Why vault-mcp?
 
-**It works whether Obsidian is running or not** — reads the vault directly from the filesystem.
+**Works whether Obsidian is open or not** - reads your vault straight from the filesystem, so your agent isn't blocked when the app is closed.
 
-**Most vault tools serve one client at a time.** vault-mcp runs an always-on HTTP server, so Claude Code and Claude Desktop can both connect to the same vault index simultaneously.
+**One vault, many AI tools at once** - it runs as an always-on server, so Claude Code and Claude Desktop can talk to the same vault at the same time, sharing one live index.
 
-**Keyword-only search misses concepts. Pure semantic search misses exact terms.** vault-mcp fuses FTS5 keyword ranking with vector embeddings into a single hybrid query, tunable per call.
+**Finds what you mean, not just what you typed** - hybrid search blends keyword ranking and semantic embeddings. Exact phrases surface when precision matters; conceptual queries work when it doesn't.
 
 ## Demo
 
+<!--
+  TODO: record docs/demo.gif — split-screen, ~60s, loopable.
+  Left half: Claude Desktop. Right half: the Obsidian vault (so changes are visibly real).
+  Beats (~12s each), watch the file appear/change on the right as Claude acts on the left:
+    1. Search  — "Find my notes on X" → results stream in.
+    2. Capture — "File this idea: …" → a new note pops into the right folder in Obsidian.
+    3. Connect — "What should I link this note to?" → related notes surfaced.
+    4. Move    — "Move note A to Archive" → file moves and a [[wikilink]] elsewhere updates live.
+  Trim dead air; keep it short.
+-->
+
 ![vault-mcp demo](docs/demo.gif)
 
-## Features
+## What you can do
 
-**Search**
-- Hybrid FTS5 + vector embeddings with tunable alpha blend
-- Tag, type, and date filters; paginated results
-- Semantic connection finder — surfaces related notes that aren't linked to each other
+**Read & write notes**
+- Ask for a note, a section of one, or a note plus everything it links to - in a single call
+- Move or rename a note and every `[[wikilink]]` pointing to it updates automatically
+- Delete safely - soft-delete sends notes to `.trash/` instead of destroying them
+- Change one note or batch dozens of moves, deletes, and frontmatter edits in one go
 
-**Vault operations**
-- Read note, read section, read note with all its linked notes in one call
-- Write, update frontmatter, move (with automatic `[[wikilink]]` rewrite across the vault), soft-delete to `.trash/`
-- Batch operations — move/delete/update multiple notes in one call
+**Find & connect**
+- Search your whole vault by keyword, by meaning, or both at once - with tag, type, and date filters
+- Surface notes that *should* be linked but aren't, so related ideas stop drifting apart
 
-**Knowledge workflows**
-- Capture pipeline — classify and file free-form text into the right folder
-- Inbox triage — auto-classify and move notes above a confidence threshold
-- Periodic notes — open or create daily, weekly, and monthly notes
+**Capture & triage**
+- Drop in free-form text and have it classified and filed in the right folder for you
+- Auto-triage your inbox: move everything above a confidence threshold to where it belongs
+- Open or create today's daily, this week's weekly, or this month's monthly note on demand
 
-**Infrastructure**
-- Multi-vault — name and switch between multiple vaults in the same server instance
-- stdio bridge — connect Claude Desktop to the always-on HTTP server
-- Automatic SQLite backup with configurable retention
-- OpenTelemetry spans per tool call; webhook alert notifications
-- `/health` and `/ready` endpoints for service probes
+**Runs as a service**
+- Name and switch between multiple vaults from one server instance
+- Connect Claude Desktop through the bundled stdio bridge
+- Automatic SQLite index backups with configurable retention
+- OpenTelemetry spans per tool call and webhook alerts, plus `/health` and `/ready` probes
 
 ## Quick Start
 
-### Option 1 — Quick install (no Bun required)
+### Option 1 - Quick install (no Bun required)
 
 Downloads the pre-built binary for your platform, walks you through configuration, and optionally installs a background service.
 
@@ -56,14 +68,14 @@ curl -fsSL https://raw.githubusercontent.com/videnovnebojsa/vault-mcp/main/insta
 irm https://raw.githubusercontent.com/videnovnebojsa/vault-mcp/main/install.ps1 | iex
 ```
 
-To reconfigure after install (change vault path, port, etc.):
+To reconfigure later (vault path, port, etc.):
 
 ```bash
 bash install.sh --configure    # macOS / Linux
 .\install.ps1 -Configure       # Windows
 ```
 
-### Option 2 — Developer install (build from source)
+### Option 2 - Developer install (build from source)
 
 Requires [Bun](https://bun.sh) 1.3+.
 
@@ -74,7 +86,7 @@ bun install
 bun run setup
 ```
 
-The setup script builds the binary, walks you through configuration, and installs a background service that starts automatically at login — **launchd** on macOS, **systemd** on Linux, **Task Scheduler** on Windows.
+`bun run setup` builds the binary, walks you through configuration, and installs a background service that starts at login - **launchd** on macOS, **systemd** on Linux, **Task Scheduler** on Windows.
 
 ### Connect Claude Code
 
@@ -111,19 +123,30 @@ curl http://localhost:3782/health
 # {"status":"ok","uptimeSeconds":12,...}
 ```
 
-`/ready` returns HTTP 503 until the vault index finishes its initial sync; `/health` always returns 200.
+`/health` always returns 200; `/ready` returns 503 until the vault index finishes its initial sync.
+
+## Common workflows
+
+Once connected, just talk to your agent in plain language. Try:
+
+- *"Find my notes on productivity systems"* → hybrid search across your whole vault
+- *"File this meeting summary"* → capture pipeline classifies it and routes it to the right folder
+- *"What notes should I connect to this one?"* → semantic connection finder surfaces related notes
+- *"Archive these three project notes"* → batch move, with every `[[wikilink]]` rewritten automatically
+
+See [docs/prompts.md](docs/prompts.md) for the full prompt cheat-sheet.
 
 ## Configuration
 
-All settings live in `~/.config/vault-mcp/.env`. The setup script writes this file with your answers and leaves every optional variable commented out with its default; if you install manually, start from [.env.example](.env.example).
+All settings live in `~/.config/vault-mcp/.env`. The setup script writes this file with your answers and leaves every optional variable commented out with its default; for a manual install, start from [.env.example](.env.example).
 
-To update settings interactively after installation, run:
+To change settings interactively after installation:
 
 ```bash
 bun run configure
 ```
 
-This opens a section menu, prompts for each setting with validation, shows a diff of what will change, and optionally restarts the service. Jump straight to a section with `--section <id>`:
+This opens a section menu, validates each setting, shows a diff of what will change, and optionally restarts the service. Jump straight to a section with `--section <id>`:
 
 ```bash
 bun run configure -- --section embeddings
@@ -131,7 +154,7 @@ bun run configure -- --section embeddings
 
 **Custom folder structure?** vault-mcp defaults to a numbered Zettelkasten-style layout. Run `bun run configure -- --section vault-folders` to remap the capture pipeline to your own folder names.
 
-To edit the file manually instead, open `~/.config/vault-mcp/.env` and restart the service when done:
+To edit the file by hand instead, open `~/.config/vault-mcp/.env` and restart the service:
 
 | Platform | Command |
 |---|---|
@@ -144,7 +167,7 @@ To edit the file manually instead, open `~/.config/vault-mcp/.env` and restart t
 ```bash
 bun run test                      # run test suite
 bun run build                     # compile TypeScript → dist/
-bun run build:bun                 # Binary build scripts → dist-bin/ (standalone executable)
+bun run build:bun                 # standalone executable → dist-bin/
 bun run scripts/smoke-test.ts     # smoke test the built binary against a real vault
 bun run lint                      # biome check
 ```
@@ -155,6 +178,8 @@ bun run lint                      # biome check
 |---|---|
 | Installation options (manual, service) | [docs/installation.md](docs/installation.md) |
 | Connecting MCP clients | [docs/clients.md](docs/clients.md) |
+| Example prompts cheat-sheet | [docs/prompts.md](docs/prompts.md) |
+| How hybrid search works | [docs/semantic-search.md](docs/semantic-search.md) |
 | Full configuration reference | [docs/configuration.md](docs/configuration.md) |
 | Full tool reference | [docs/tools.md](docs/tools.md) |
 | Feature roadmap & status | [docs/roadmap.md](docs/roadmap.md) |
