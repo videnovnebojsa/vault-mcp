@@ -1,6 +1,7 @@
 export {};
 
-if (process.argv[2] === "bridge") {
+// argv[1] in compiled binary (no script path), argv[2] when run via bun/node
+if (process.argv.includes("bridge")) {
   await import("./bridge-main.js");
 } else {
   const { bootstrap } = await import("./bootstrap.js");
