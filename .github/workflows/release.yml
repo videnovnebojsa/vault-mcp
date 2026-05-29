@@ -18,6 +18,8 @@ jobs:
     permissions:
       contents: read
     strategy:
+      # Keep fail-fast disabled so every platform reports, but do not use
+      # continue-on-error: a missing platform asset must fail the release.
       fail-fast: false
       matrix:
         include:
