@@ -400,6 +400,12 @@ printf "Add to ${CYAN}.mcp.json${RESET} in your project root:\n\n"
 printf '{\n  "mcpServers": {\n    "vault": { "type": "http", "url": "http://127.0.0.1:%s/mcp" }\n  }\n}\n' "$MCP_PORT"
 
 printf "\n"
+header "Connect Claude Desktop"
+printf "Add to ${CYAN}claude_desktop_config.json${RESET}:\n\n"
+printf '{\n  "mcpServers": {\n    "vault": {\n      "command": "%s",\n      "args": ["bridge"],\n      "env": { "VAULT_MCP_URL": "http://127.0.0.1:%s/mcp" }\n    }\n  }\n}\n' "${INSTALLED_BIN}" "$MCP_PORT"
+printf "\n${YELLOW}Note:${RESET} vault-mcp must be running (the background service handles this).\n"
+
+printf "\n"
 header "Verify"
 printf "  ${CYAN}curl http://localhost:${MCP_PORT}/health${RESET}\n"
 

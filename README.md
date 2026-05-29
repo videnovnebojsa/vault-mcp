@@ -108,13 +108,15 @@ Add to `claude_desktop_config.json`:
 {
   "mcpServers": {
     "vault": {
-      "command": "bun",
-      "args": ["/path/to/vault-mcp/bin/stdio-bridge.ts"],
+      "command": "/path/to/vault-mcp",
+      "args": ["bridge"],
       "env": { "VAULT_MCP_URL": "http://127.0.0.1:3782/mcp" }
     }
   }
 }
 ```
+
+Replace `/path/to/vault-mcp` with the actual binary path — typically `~/.local/bin/vault-mcp` after a quick install or `/usr/local/bin/vault-mcp` after a manual install. The `vault-mcp` server must be running (the background service installed by the setup script handles this automatically).
 
 ### Verify
 
