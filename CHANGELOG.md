@@ -4,6 +4,14 @@ All notable changes to this project will be documented in this file.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.3] - 2026-05-30
+
+### Fixed
+- Release workflow: two-phase build/publish so a release is created once with all assets attached — compatible with GitHub release immutability (previous per-asset `gh release upload --clobber` modified a published release and was rejected)
+- De-flake PERF-01 backup race that intermittently blocked pre-push
+
+[0.1.3]: https://github.com/videnovnebojsa/vault-mcp/compare/v0.1.2...v0.1.3
+
 ## [0.1.2] - 2026-05-29
 
 ### Added
