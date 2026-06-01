@@ -21,22 +21,53 @@ import type { VaultServices } from "./vault/manager.js";
 // ── HTTP helpers ───────────────────────────────────────────────────────────────
 
 function httpGet(url: string): Promise<{ status: number; body: unknown }> {
+  return httpGetWithHeaders(url).then(({ status, body }) => ({ status, body }));
+}
+
+function httpGetWithHeaders(
+  url: string,
+  headers: Record<string, string> = {},
+): Promise<{ status: number; body: unknown; headers: http.IncomingHttpHeaders }> {
   return new Promise((resolve, reject) => {
     http
-      .get(url, (res) => {
+      .get(url, { headers }, (res) => {
         let data = "";
         res.on("data", (chunk: string) => {
           data += chunk;
         });
         res.on("end", () => {
           try {
-            resolve({ status: res.statusCode ?? 0, body: JSON.parse(data) });
+            resolve({ status: res.statusCode ?? 0, body: JSON.parse(data), headers: res.headers });
           } catch {
-            resolve({ status: res.statusCode ?? 0, body: data });
+            resolve({ status: res.statusCode ?? 0, body: data, headers: res.headers });
           }
         });
       })
       .on("error", reject);
+  });
+}
+
+function httpRequestMethod(
+  method: string,
+  url: string,
+  headers: Record<string, string> = {},
+): Promise<{ status: number; body: unknown; headers: http.IncomingHttpHeaders }> {
+  return new Promise((resolve, reject) => {
+    const req = http.request(url, { method, headers }, (res) => {
+      let data = "";
+      res.on("data", (chunk: string) => {
+        data += chunk;
+      });
+      res.on("end", () => {
+        try {
+          resolve({ status: res.statusCode ?? 0, body: JSON.parse(data), headers: res.headers });
+        } catch {
+          resolve({ status: res.statusCode ?? 0, body: data, headers: res.headers });
+        }
+      });
+    });
+    req.on("error", reject);
+    req.end();
   });
 }
 
@@ -362,6 +393,118 @@ describe("POST /mcp session cap", () => {
 
     expect(status).toBe(429);
     expect(body).toEqual({ error: "Too many sessions" });
+  });
+});
+
+describe("GET /mcp (standalone SSE stream declined)", () => {
+  let handle: Awaited<ReturnType<typeof startHttpServer>>;
+
+  afterEach(async () => {
+    await handle?.close();
+  });
+
+  it("returns 405 with an Allow header — server offers no GET SSE stream", async () => {
+    handle = await startHttpServer(makeBootstrap());
+    const port = await waitForListen(handle.httpServer);
+
+    const { status, body, headers } = await httpGetWithHeaders(`http://127.0.0.1:${port}/mcp`);
+    expect(status).toBe(405);
+    expect(headers["allow"]).toBe("POST, DELETE");
+    expect((body as { error: string }).error).toMatch(/does not offer a GET SSE stream/);
+  });
+
+  it("returns 405 (with Allow header + body) even when a mcp-session-id header is present [QA-04]", async () => {
+    handle = await startHttpServer(makeBootstrap());
+    const port = await waitForListen(handle.httpServer);
+
+    const { status, body, headers } = await httpGetWithHeaders(`http://127.0.0.1:${port}/mcp`, {
+      "mcp-session-id": "00000000-0000-0000-0000-000000000000",
+    });
+    expect(status).toBe(405);
+    expect(headers["allow"]).toBe("POST, DELETE");
+    expect((body as { error: string }).error).toMatch(/does not offer a GET SSE stream/);
+  });
+
+  it("enforces the API key before the 405 guard (GET without auth → 401)", async () => {
+    const boot = makeBootstrap();
+    boot.config.mcpApiKey = "secret-key";
+    handle = await startHttpServer(boot);
+    const port = await waitForListen(handle.httpServer);
+
+    const { status, body } = await httpGetWithHeaders(`http://127.0.0.1:${port}/mcp`);
+    expect(status).toBe(401);
+    expect((body as { error: string }).error).toBe("Unauthorized");
+  });
+
+  it("still returns 405 for an authenticated GET — auth passes, then the guard fires [QA-01]", async () => {
+    const boot = makeBootstrap();
+    boot.config.mcpApiKey = "secret-key";
+    handle = await startHttpServer(boot);
+    const port = await waitForListen(handle.httpServer);
+
+    const { status, body, headers } = await httpGetWithHeaders(`http://127.0.0.1:${port}/mcp`, {
+      Authorization: "Bearer secret-key",
+    });
+    expect(status).toBe(405);
+    expect(headers["allow"]).toBe("POST, DELETE");
+    expect((body as { error: string }).error).toMatch(/does not offer a GET SSE stream/);
+  });
+
+  it("records a metric for the 405 rejection, observable via /health [ERR-01]", async () => {
+    const boot = makeBootstrap();
+    boot.config.mcpApiKey = "secret-key";
+    handle = await startHttpServer(boot);
+    const port = await waitForListen(handle.httpServer);
+
+    // Trigger the rejection
+    const rejected = await httpGetWithHeaders(`http://127.0.0.1:${port}/mcp`, {
+      Authorization: "Bearer secret-key",
+    });
+    expect(rejected.status).toBe(405);
+
+    // The rejection must be observable in the authenticated /health metrics snapshot
+    const { body } = await httpGetWithHeaders(`http://127.0.0.1:${port}/health`, {
+      Authorization: "Bearer secret-key",
+    });
+    const metrics = (body as { metrics: Record<string, { count: number }> }).metrics;
+    expect(metrics["http_mcp_method_not_allowed"]?.count).toBeGreaterThanOrEqual(1);
+  });
+});
+
+describe("/mcp unsupported methods (PUT/PATCH → 405)", () => {
+  let handle: Awaited<ReturnType<typeof startHttpServer>>;
+
+  afterEach(async () => {
+    await handle?.close();
+  });
+
+  it.each(["PUT", "PATCH"])("returns 405 with an Allow header for %s [API-04]", async (method) => {
+    handle = await startHttpServer(makeBootstrap());
+    const port = await waitForListen(handle.httpServer);
+
+    const { status, body, headers } = await httpRequestMethod(method, `http://127.0.0.1:${port}/mcp`);
+    expect(status).toBe(405);
+    expect(headers["allow"]).toBe("POST, DELETE");
+    expect((body as { error: string }).error).toBe("Method Not Allowed");
+  });
+});
+
+describe("DELETE /mcp (session teardown — advertised in Allow)", () => {
+  let handle: Awaited<ReturnType<typeof startHttpServer>>;
+
+  afterEach(async () => {
+    await handle?.close();
+  });
+
+  it("routes DELETE to session teardown — unknown session → 404, not 405 [QA-02]", async () => {
+    handle = await startHttpServer(makeBootstrap());
+    const port = await waitForListen(handle.httpServer);
+
+    const { status, body } = await httpRequestMethod("DELETE", `http://127.0.0.1:${port}/mcp`, {
+      "mcp-session-id": "00000000-0000-0000-0000-000000000000",
+    });
+    expect(status).toBe(404);
+    expect((body as { error: string }).error).toBe("Session not found");
   });
 });
 

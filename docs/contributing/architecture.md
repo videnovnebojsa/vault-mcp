@@ -74,6 +74,7 @@ src/
 │
 ├── bridge/
 │   └── stdio-http-bridge.ts — Bridges stdio transport ↔ HTTP transport for Claude Desktop
+│                              (server is request/response-only; declines GET SSE — see ADR-0001)
 │
 └── utils/
     ├── errors.ts     — VaultError, VaultErrorCode enum, formatErrorResponse
@@ -122,6 +123,14 @@ vault/repository.ts    search/store.ts (SQLite)
 - **Readiness vs liveness**: `GET /ready` returns 503 while vaults are booting. `GET /health` always returns 200.
 
 See `docs/contributing/design-standards.md` for the full set of rules and the reasoning behind each.
+
+## Decision Records
+
+Significant architectural choices are captured as ADRs in [`docs/adr/`](../adr/README.md). Notable:
+
+- [ADR-0001](../adr/0001-decline-standalone-get-sse-stream.md) — `/mcp` accepts only `POST` and
+  `DELETE`; all other methods (incl. the optional standalone `GET` SSE stream) return `405`,
+  because the server never sends server-initiated messages.
 
 ## Database
 

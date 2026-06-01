@@ -249,6 +249,25 @@ export async function startHttpServer(boot: BootstrapResult, opts: HttpServerOpt
         }
       }
 
+      // This server is request/response-only: it only accepts POST (request/response) and
+      // DELETE (session teardown). Every other method gets 405 + an Allow header, matching the
+      // advertised method contract. In particular this declines the optional standalone GET SSE
+      // stream — this server never sends server-initiated messages (no notifications,
+      // subscriptions, or list-changed events), so SDK clients (including the stdio bridge) must
+      // not open a long-lived idle GET stream that times out and then wedges on 409 reconnect
+      // races. Per the MCP spec the GET stream is optional, and the SDK client treats 405 as the
+      // canonical "no SSE at GET" signal — it stops cleanly without reconnecting.
+      if (req.method !== "POST" && req.method !== "DELETE") {
+        res.setHeader("Allow", "POST, DELETE");
+        metrics.record("http_mcp_method_not_allowed", 0, false);
+        httpLogger.info("declined unsupported method", { method: req.method, status: 405 });
+        res.status(405).json({
+          error:
+            req.method === "GET" ? "Method Not Allowed: server does not offer a GET SSE stream" : "Method Not Allowed",
+        });
+        return;
+      }
+
       const sessionId = firstHeader(req.headers["mcp-session-id"]);
 
       if (req.method === "POST" && !sessionId) {

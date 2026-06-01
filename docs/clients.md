@@ -39,6 +39,8 @@ If you set `MCP_API_KEY`, add it as a header:
 
 Claude Desktop uses stdio (not HTTP), so connect it via the included stdio bridge. The bridge is a lightweight process that translates between stdio JSON-RPC and the HTTP server.
 
+> The server is request/response-only and declines the optional standalone GET SSE stream (returns `405` on `GET /mcp`). See [ADR-0001](adr/0001-decline-standalone-get-sse-stream.md) for the rationale.
+
 **Step 1** - make sure the vault-mcp HTTP server is running (see [installation.md](installation.md)).
 
 **Step 2** - add to `claude_desktop_config.json`:
