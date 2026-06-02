@@ -1,8 +1,6 @@
-import { randomUUID } from "node:crypto";
 import type { IncomingMessage, Server, ServerResponse } from "node:http";
 import { createServer as createHttpServer } from "node:http";
 import { createMcpExpressApp } from "@modelcontextprotocol/sdk/server/express.js";
-import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import type { BootstrapResult } from "./bootstrap.js";
 import { createServer } from "./mcp/server.js";
@@ -13,11 +11,39 @@ import { isValidToken } from "./utils/token.js";
 
 const httpLogger = logger.child("http");
 
-const MAX_SESSION_ID_LENGTH = 256;
 const DEFAULT_HTTP_BODY_LIMIT_BYTES = 1024 * 1024;
+const DEFAULT_MAX_CONCURRENT_REQUESTS = 100;
 
 function firstHeader(h: string | string[] | undefined): string | undefined {
   return Array.isArray(h) ? h[0] : h;
+}
+
+function getJsonRpcLogContext(body: unknown): { method?: string; id?: string | number | null } {
+  if (typeof body !== "object" || body === null || Array.isArray(body)) {
+    return {};
+  }
+  const candidate = body as { method?: unknown; id?: unknown };
+  const context: { method?: string; id?: string | number | null } = {};
+  if (typeof candidate.method === "string") {
+    context.method = candidate.method;
+  }
+  if (typeof candidate.id === "string" || typeof candidate.id === "number" || candidate.id === null) {
+    context.id = candidate.id;
+  }
+  return context;
+}
+
+async function safeCloseRequestResource(
+  name: "transport.close" | "server.close",
+  close: () => Promise<void>,
+): Promise<void> {
+  try {
+    await close();
+  } catch (err) {
+    httpLogger.error(`${name} failed`, {
+      err: err instanceof Error ? err.message : String(err),
+    });
+  }
 }
 
 export function parsePositiveIntEnv(name: string, defaultValue: number): number {
@@ -29,122 +55,57 @@ export function parsePositiveIntEnv(name: string, defaultValue: number): number 
   return parsed;
 }
 
-const MAX_SESSIONS = parsePositiveIntEnv("MCP_MAX_SESSIONS", 100);
-const SESSION_IDLE_MS = parsePositiveIntEnv("MCP_SESSION_IDLE_MS", 30 * 60 * 1000);
-
-interface SessionEntry {
-  transport: StreamableHTTPServerTransport;
-  server: McpServer;
-  lastActivityAt: number;
-}
-
-export type ShutdownSessionEntry = Pick<SessionEntry, "server">;
-
 export interface HttpServerHandle {
   httpServer: Server;
   close(): Promise<void>;
 }
 
 export interface HttpServerOptions {
-  maxSessions?: number;
-  sessionIdleMs?: number;
   bodyLimitBytes?: number;
-}
-
-export async function handleExistingSessionRequest(
-  entry: SessionEntry,
-  req: IncomingMessage,
-  res: ServerResponse & { status(code: number): ServerResponse & { json(body: unknown): void } },
-  body: unknown,
-): Promise<void> {
-  entry.lastActivityAt = Date.now();
-  try {
-    await entry.transport.handleRequest(req, res, body);
-  } catch (err) {
-    httpLogger.error("existing session transport error", {
-      err: err instanceof Error ? err.message : String(err),
-    });
-    if (!res.headersSent) {
-      res.status(500).json({ error: "Internal server error" });
-    }
-  }
-}
-
-export async function handleNewSessionTransportError(
-  sessionId: string | undefined,
-  sessions: Map<string, unknown>,
-  server: Pick<McpServer, "close">,
-  res: ServerResponse & { status(code: number): ServerResponse & { json(body: unknown): void } },
-  err: unknown,
-): Promise<void> {
-  if (sessionId) sessions.delete(sessionId);
-  httpLogger.error("new session transport error", {
-    err: err instanceof Error ? err.message : String(err),
-  });
-  await server.close().catch((closeErr: unknown) => {
-    httpLogger.warn("session close failed after transport error", {
-      err: closeErr instanceof Error ? closeErr.message : String(closeErr),
-    });
-  });
-  if (!res.headersSent) {
-    res.status(500).json({ error: "Internal server error" });
-  }
-}
-
-export async function closeActiveSessionsForShutdown(sessions: Map<string, ShutdownSessionEntry>): Promise<void> {
-  for (const [sid, entry] of sessions) {
-    try {
-      await entry.server.close();
-    } catch (err) {
-      httpLogger.warn("session close failed during shutdown", {
-        sid: sid.slice(0, 8),
-        err: err instanceof Error ? err.message : String(err),
-      });
-    } finally {
-      sessions.delete(sid);
-    }
-  }
+  maxConcurrentRequests?: number;
 }
 
 export async function startHttpServer(boot: BootstrapResult, opts: HttpServerOptions = {}): Promise<HttpServerHandle> {
   const { config } = boot;
-  const sessions = new Map<string, SessionEntry>();
-  const maxSessions = opts.maxSessions ?? MAX_SESSIONS;
-  const sessionIdleMs = opts.sessionIdleMs ?? SESSION_IDLE_MS;
   const bodyLimitBytes =
     opts.bodyLimitBytes ?? parsePositiveIntEnv("MCP_HTTP_BODY_LIMIT_BYTES", DEFAULT_HTTP_BODY_LIMIT_BYTES);
+  const maxConcurrentRequests =
+    opts.maxConcurrentRequests ?? parsePositiveIntEnv("MCP_MAX_CONCURRENT_REQUESTS", DEFAULT_MAX_CONCURRENT_REQUESTS);
+  const idleRequestServers: Array<ReturnType<typeof createServer>> = [];
+  const inFlightRequests = new Set<Promise<void>>();
+  let createdRequestServers = 0;
 
-  // Periodic idle session cleanup — every 5 minutes
-  const idleCleanupInterval = setInterval(
-    () => {
-      const now = Date.now();
-      for (const [sid, entry] of sessions) {
-        if (now - entry.lastActivityAt > sessionIdleMs) {
-          entry.server
-            .close()
-            .then(() => {
-              sessions.delete(sid);
-              httpLogger.info("session evicted (idle)", { sid: sid.slice(0, 8) });
-            })
-            .catch((err: unknown) => {
-              sessions.delete(sid);
-              httpLogger.warn("session close failed during idle eviction", {
-                sid: sid.slice(0, 8),
-                err: err instanceof Error ? err.message : String(err),
-              });
-            });
-        }
-      }
-    },
-    5 * 60 * 1000,
-  ).unref();
+  const acquireRequestServer = (): ReturnType<typeof createServer> | null => {
+    const idleServer = idleRequestServers.pop();
+    if (idleServer) return idleServer;
+    if (createdRequestServers >= maxConcurrentRequests) return null;
+    const server = createServer({
+      vaultManager: boot.vaultManager,
+      mcpHost: config.mcpHost,
+      mcpPort: config.mcpPort,
+    });
+    createdRequestServers += 1;
+    return server;
+  };
+
+  const releaseRequestServer = (server: ReturnType<typeof createServer>): void => {
+    if (idleRequestServers.length < maxConcurrentRequests) {
+      idleRequestServers.push(server);
+    }
+  };
+
+  const waitForInFlightRequests = async (): Promise<void> => {
+    while (inFlightRequests.size > 0) {
+      await Promise.allSettled(Array.from(inFlightRequests));
+    }
+  };
 
   const app = createMcpExpressApp({ host: config.mcpHost });
 
   const startedAt = Date.now();
   // GET /health — returns {status,uptimeSeconds} to all callers.
   // When MCP_API_KEY is set, an authenticated request (Authorization: Bearer <key>)
-  // additionally returns circuit-breaker state, session count, and metrics.
+  // additionally returns vault boot state, circuit-breaker state, and metrics.
   app.get(
     "/health",
     async (
@@ -153,7 +114,7 @@ export async function startHttpServer(boot: BootstrapResult, opts: HttpServerOpt
     ) => {
       const uptimeSeconds = Math.floor((Date.now() - startedAt) / 1000);
       // When an API key is configured, require it for detailed health data to avoid
-      // leaking circuit names, session counts, and metrics to unauthenticated callers.
+      // leaking circuit names, vault state, and metrics to unauthenticated callers.
       if (config.mcpApiKey) {
         const auth = firstHeader(req.headers.authorization);
         const token = auth?.startsWith("Bearer ") ? auth.slice(7) : undefined;
@@ -183,7 +144,6 @@ export async function startHttpServer(boot: BootstrapResult, opts: HttpServerOpt
       res.json({
         status: "ok",
         transport: "http",
-        sessions: sessions.size,
         uptimeSeconds,
         vaults: vaultStates,
         circuits,
@@ -268,65 +228,80 @@ export async function startHttpServer(boot: BootstrapResult, opts: HttpServerOpt
         return;
       }
 
-      const sessionId = firstHeader(req.headers["mcp-session-id"]);
+      // DELETE — stateless mode has no session to tear down. Acknowledge so a client's
+      // terminateSession() call never surfaces as an error.
+      if (req.method === "DELETE") {
+        res.status(200).json({ ok: true });
+        return;
+      }
 
-      if (req.method === "POST" && !sessionId) {
-        // Enforce session limit before creating a new session
-        if (sessions.size >= maxSessions) {
-          res.status(429).json({
-            error: "Too many sessions",
-          });
-          return;
-        }
+      const server = acquireRequestServer();
+      if (!server) {
+        res.status(429).json({ error: "Too Many Requests" });
+        return;
+      }
 
-        // Create server FIRST so it's guaranteed to be defined when onsessioninitialized fires
-        const server = createServer({
-          vaultManager: boot.vaultManager,
-          mcpHost: config.mcpHost,
-          mcpPort: config.mcpPort,
-        });
-
-        const transport = new StreamableHTTPServerTransport({
-          sessionIdGenerator: () => randomUUID(),
-          onsessioninitialized: (sid: string) => {
-            sessions.set(sid, { transport, server, lastActivityAt: Date.now() });
-            transport.onclose = () => {
-              sessions.delete(sid);
-              httpLogger.info("session closed", { sid: sid.slice(0, 8), remaining: sessions.size });
-            };
-            httpLogger.info("session created", { sid: sid.slice(0, 8), active: sessions.size });
-          },
-        });
-
-        try {
-          // @ts-expect-error -- MCP SDK StreamableHTTPServerTransport uses T|undefined for onclose, incompatible with exactOptionalPropertyTypes
-          await server.connect(transport);
-          await transport.handleRequest(req, res, req.body);
-
-          if (!transport.sessionId) {
-            await server.close();
+      // POST — stateless request/response. Reuse a warmed McpServer when one is idle, but always
+      // create a fresh transport per request (sessionIdGenerator: undefined), so no
+      // mcp-session-id is ever issued or required, and a stale session id from a reconnecting
+      // client is simply ignored. This removes the entire session lifecycle: no in-memory session
+      // map, no idle eviction, and no "Session not found" after an idle gap or a server restart.
+      // The SDK forbids transport reuse across requests, but the heavy vault state lives in
+      // boot.vaultManager, so a bounded server pool is enough to avoid per-request tool
+      // re-registration. See docs/adr/0003-stateless-http-sessions.md.
+      // Omitting sessionIdGenerator selects the SDK's stateless mode (it reads as `undefined`
+      // internally); we omit rather than pass `undefined` to satisfy exactOptionalPropertyTypes.
+      const transport = new StreamableHTTPServerTransport({});
+      let resolveRequestDrain!: () => void;
+      const requestDrainPromise = new Promise<void>((resolve) => {
+        resolveRequestDrain = resolve;
+      });
+      inFlightRequests.add(requestDrainPromise);
+      let requestDrainResolved = false;
+      const settleRequestDrain = (): void => {
+        if (requestDrainResolved) return;
+        requestDrainResolved = true;
+        inFlightRequests.delete(requestDrainPromise);
+        resolveRequestDrain();
+      };
+      let closeRequestResourcesPromise: Promise<void> | null = null;
+      const closeRequestResources = (): Promise<void> => {
+        if (closeRequestResourcesPromise) return closeRequestResourcesPromise;
+        closeRequestResourcesPromise = (async () => {
+          try {
+            await safeCloseRequestResource("transport.close", () => transport.close());
+            await safeCloseRequestResource("server.close", () => server.close());
+          } finally {
+            releaseRequestServer(server);
           }
-        } catch (err) {
-          await handleNewSessionTransportError(transport.sessionId, sessions, server, res, err);
-        }
-        return;
-      }
+        })().finally(() => {
+          settleRequestDrain();
+        });
+        return closeRequestResourcesPromise;
+      };
+      res.on("finish", () => {
+        void closeRequestResources();
+      });
+      res.on("close", () => {
+        void closeRequestResources();
+      });
 
-      if (sessionId) {
-        if (sessionId.length > MAX_SESSION_ID_LENGTH) {
-          res.status(400).json({ error: "Invalid mcp-session-id header" });
-          return;
+      try {
+        // @ts-expect-error -- MCP SDK StreamableHTTPServerTransport uses T|undefined for onclose, incompatible with exactOptionalPropertyTypes
+        await server.connect(transport);
+        await transport.handleRequest(req, res, req.body);
+      } catch (err) {
+        httpLogger.error("stateless request transport error", {
+          err: err instanceof Error ? err.message : String(err),
+          ...getJsonRpcLogContext(req.body),
+        });
+        if (!res.headersSent) {
+          res.status(500).json({ error: "Internal server error" });
+        } else if (!res.writableEnded) {
+          res.end();
         }
-        const entry = sessions.get(sessionId);
-        if (!entry) {
-          res.status(404).json({ error: "Session not found" });
-          return;
-        }
-        await handleExistingSessionRequest(entry, req, res, req.body);
-        return;
+        await closeRequestResources();
       }
-
-      res.status(400).json({ error: "Missing mcp-session-id header" });
     },
   );
 
@@ -368,11 +343,10 @@ export async function startHttpServer(boot: BootstrapResult, opts: HttpServerOpt
   });
 
   const close = async () => {
-    clearInterval(idleCleanupInterval);
-    await closeActiveSessionsForShutdown(sessions);
-    await new Promise<void>((resolve, reject) => {
+    const closeHttpServerPromise = new Promise<void>((resolve, reject) => {
       httpServer.close((err?: Error) => (err ? reject(err) : resolve()));
     });
+    await Promise.all([closeHttpServerPromise, waitForInFlightRequests()]);
   };
 
   return { httpServer, close };

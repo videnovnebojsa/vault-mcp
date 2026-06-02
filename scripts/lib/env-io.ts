@@ -84,9 +84,7 @@ ${envLine(values, "MCP_PORT", "3782")}
 ${envLine(values, "MCP_HOST", "127.0.0.1", "0.0.0.0 to expose on the network")}
 ${envLine(values, "MCP_API_KEY", "", "Bearer token; empty = local-only")}
 ${envLine(values, "MCP_HTTP_BODY_LIMIT_BYTES", "1048576")}
-${envLine(values, "MCP_MAX_SESSIONS", "100")}
 ${envLine(values, "MCP_MAX_CONCURRENT_REQUESTS", "100")}
-${envLine(values, "MCP_SESSION_IDLE_MS", "1800000", "30 minutes")}
 
 # ── Vector Embeddings ─────────────────────────────────────────────────────────
 ${envLine(values, "ENABLE_EMBEDDINGS", "false")}

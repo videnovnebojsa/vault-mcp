@@ -1,21 +1,15 @@
 /**
- * Tests for src/http.ts — integration tests for HTTP endpoints and
- * unit tests for session-management logic (bounds + idle eviction).
+ * Tests for src/http.ts — integration tests for the HTTP endpoints in
+ * stateless transport mode (no sessions). See docs/adr/0003-stateless-http-sessions.md.
  */
 
-import { afterEach, beforeEach, describe, expect, it, jest, mock } from "bun:test";
+import { afterEach, describe, expect, it } from "bun:test";
 import http from "node:http";
 import net from "node:net";
 import type { BootstrapResult } from "./bootstrap.js";
 import { VAULT_FOLDERS } from "./config/folders.js";
 import type { VaultConfig } from "./config.js";
-import {
-  closeActiveSessionsForShutdown,
-  handleExistingSessionRequest,
-  handleNewSessionTransportError,
-  parsePositiveIntEnv,
-  startHttpServer,
-} from "./http.js";
+import { parsePositiveIntEnv, startHttpServer } from "./http.js";
 import type { VaultServices } from "./vault/manager.js";
 
 // ── HTTP helpers ───────────────────────────────────────────────────────────────
@@ -129,6 +123,42 @@ function httpPostJsonWithHeaders(
             resolve({ status: res.statusCode ?? 0, body: JSON.parse(data) });
           } catch {
             resolve({ status: res.statusCode ?? 0, body: data });
+          }
+        });
+      },
+    );
+    req.on("error", reject);
+    req.end(payload);
+  });
+}
+
+function httpPostJsonFull(
+  url: string,
+  body: unknown,
+  headers: Record<string, string | number> = {},
+): Promise<{ status: number; body: unknown; headers: http.IncomingHttpHeaders }> {
+  const payload = JSON.stringify(body);
+  return new Promise((resolve, reject) => {
+    const req = http.request(
+      url,
+      {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "content-length": Buffer.byteLength(payload),
+          ...headers,
+        },
+      },
+      (res) => {
+        let data = "";
+        res.on("data", (chunk: string) => {
+          data += chunk;
+        });
+        res.on("end", () => {
+          try {
+            resolve({ status: res.statusCode ?? 0, body: JSON.parse(data), headers: res.headers });
+          } catch {
+            resolve({ status: res.statusCode ?? 0, body: data, headers: res.headers });
           }
         });
       },
@@ -369,30 +399,97 @@ describe("GET /ready", () => {
   });
 });
 
-describe("POST /mcp session cap", () => {
+describe("POST /mcp (stateless transport)", () => {
   let handle: Awaited<ReturnType<typeof startHttpServer>>;
+
+  const initBody = {
+    jsonrpc: "2.0",
+    id: 1,
+    method: "initialize",
+    params: {
+      protocolVersion: "2025-03-26",
+      capabilities: {},
+      clientInfo: { name: "test", version: "1.0.0" },
+    },
+  };
 
   afterEach(async () => {
     await handle?.close();
   });
 
-  it("returns 429 from the real HTTP handler when the session cap is reached", async () => {
-    handle = await startHttpServer(makeBootstrap(), { maxSessions: 0 });
+  it("handles initialize without issuing an mcp-session-id header", async () => {
+    handle = await startHttpServer(makeBootstrap());
     const port = await waitForListen(handle.httpServer);
 
-    const { status, body } = await httpPostJson(`http://127.0.0.1:${port}/mcp`, {
-      jsonrpc: "2.0",
-      id: 1,
-      method: "initialize",
-      params: {
-        protocolVersion: "2025-03-26",
-        capabilities: {},
-        clientInfo: { name: "test", version: "1.0.0" },
-      },
+    const { status, body, headers } = await httpPostJsonFull(`http://127.0.0.1:${port}/mcp`, initBody, {
+      Accept: "application/json, text/event-stream",
     });
 
-    expect(status).toBe(429);
-    expect(body).toEqual({ error: "Too many sessions" });
+    expect(status).toBe(200);
+    const bodyStr = typeof body === "string" ? body : JSON.stringify(body);
+    expect(bodyStr).toContain("protocolVersion");
+    // Stateless: the server must never hand back a session id.
+    expect(headers["mcp-session-id"]).toBeUndefined();
+  });
+
+  it("accepts a request carrying a stale mcp-session-id (no 404) [the reported bug]", async () => {
+    // Reproduces the incident: a client reconnects with a session id the server no longer knows.
+    // In stateless mode there is no session to miss, so this must succeed instead of 404'ing.
+    handle = await startHttpServer(makeBootstrap());
+    const port = await waitForListen(handle.httpServer);
+
+    const { status, body } = await httpPostJsonFull(`http://127.0.0.1:${port}/mcp`, initBody, {
+      Accept: "application/json, text/event-stream",
+      "mcp-session-id": "00000000-0000-0000-0000-stale00000000",
+    });
+
+    expect(status).toBe(200);
+    const bodyStr = typeof body === "string" ? body : JSON.stringify(body);
+    expect(bodyStr).toContain("protocolVersion");
+  });
+
+  it("serves independent POSTs — each request stands alone with no shared session", async () => {
+    handle = await startHttpServer(makeBootstrap());
+    const port = await waitForListen(handle.httpServer);
+
+    const first = await httpPostJsonFull(`http://127.0.0.1:${port}/mcp`, initBody, {
+      Accept: "application/json, text/event-stream",
+    });
+    const second = await httpPostJsonFull(`http://127.0.0.1:${port}/mcp`, initBody, {
+      Accept: "application/json, text/event-stream",
+    });
+
+    expect(first.status).toBe(200);
+    expect(second.status).toBe(200);
+  });
+
+  it("reuses a single pooled McpServer across sequential POSTs against the real SDK [PERF-01]", async () => {
+    // Cap the pool at one server so the second POST can only succeed if that single
+    // McpServer was torn down (server.close()) and then successfully re-connect()ed to a
+    // fresh transport — i.e. real-SDK reuse-after-close works (mock-injected pool tests
+    // can't prove this against SDK 1.29.0). Until the first request's async teardown
+    // releases the pooled server, the cap returns 429, so poll until it frees up; a broken
+    // reuse path would surface as a 500 here, failing the 200 assertion.
+    handle = await startHttpServer(makeBootstrap(), { maxConcurrentRequests: 1 });
+    const port = await waitForListen(handle.httpServer);
+
+    const first = await httpPostJsonFull(`http://127.0.0.1:${port}/mcp`, initBody, {
+      Accept: "application/json, text/event-stream",
+    });
+    expect(first.status).toBe(200);
+
+    let second: Awaited<ReturnType<typeof httpPostJsonFull>> | undefined;
+    for (let attempt = 0; attempt < 50; attempt++) {
+      second = await httpPostJsonFull(`http://127.0.0.1:${port}/mcp`, initBody, {
+        Accept: "application/json, text/event-stream",
+      });
+      if (second.status !== 429) break;
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+
+    expect(second?.status).toBe(200);
+    const bodyStr = typeof second?.body === "string" ? second.body : JSON.stringify(second?.body);
+    expect(bodyStr).toContain("protocolVersion");
   });
 });
 
@@ -489,22 +586,22 @@ describe("/mcp unsupported methods (PUT/PATCH → 405)", () => {
   });
 });
 
-describe("DELETE /mcp (session teardown — advertised in Allow)", () => {
+describe("DELETE /mcp (advertised in Allow)", () => {
   let handle: Awaited<ReturnType<typeof startHttpServer>>;
 
   afterEach(async () => {
     await handle?.close();
   });
 
-  it("routes DELETE to session teardown — unknown session → 404, not 405 [QA-02]", async () => {
+  it("returns 200 no-op — stateless mode has no session to tear down [QA-02]", async () => {
     handle = await startHttpServer(makeBootstrap());
     const port = await waitForListen(handle.httpServer);
 
     const { status, body } = await httpRequestMethod("DELETE", `http://127.0.0.1:${port}/mcp`, {
       "mcp-session-id": "00000000-0000-0000-0000-000000000000",
     });
-    expect(status).toBe(404);
-    expect((body as { error: string }).error).toBe("Session not found");
+    expect(status).toBe(200);
+    expect(body).toEqual({ ok: true });
   });
 });
 
@@ -523,208 +620,7 @@ describe("HTTP server errors", () => {
   });
 });
 
-// ── Session bounds tests (unit-level, no HTTP server) ─────────────────────────
-
-interface SessionEntry {
-  transport: { close?: () => void };
-  server: { close: () => Promise<void> };
-  lastActivityAt: number;
-}
-
-function makeSessionManager(maxSessions: number, idleMs: number) {
-  const sessions = new Map<string, SessionEntry>();
-  let intervalHandle: ReturnType<typeof setInterval> | undefined;
-
-  function startIdleCleanup() {
-    intervalHandle = setInterval(
-      () => {
-        const now = Date.now();
-        for (const [sid, entry] of sessions) {
-          if (now - entry.lastActivityAt > idleMs) {
-            entry.server
-              .close()
-              .then(() => {
-                sessions.delete(sid);
-              })
-              .catch(() => {
-                sessions.delete(sid);
-              });
-          }
-        }
-      },
-      5 * 60 * 1000,
-    );
-    return intervalHandle;
-  }
-
-  function tryAddSession(sid: string, entry: SessionEntry): { ok: true } | { ok: false; reason: "max_sessions" } {
-    if (sessions.size >= maxSessions) return { ok: false, reason: "max_sessions" };
-    sessions.set(sid, entry);
-    return { ok: true };
-  }
-
-  function touchSession(sid: string): boolean {
-    const entry = sessions.get(sid);
-    if (!entry) return false;
-    entry.lastActivityAt = Date.now();
-    return true;
-  }
-
-  function cleanup() {
-    if (intervalHandle !== undefined) clearInterval(intervalHandle);
-  }
-
-  return { sessions, startIdleCleanup, tryAddSession, touchSession, cleanup };
-}
-
-describe("HTTP session bounds", () => {
-  beforeEach(() => {
-    jest.useFakeTimers();
-  });
-
-  afterEach(() => {
-    jest.useRealTimers();
-  });
-
-  it("rejects 101st session when MAX_SESSIONS=100", () => {
-    const { sessions, tryAddSession, cleanup } = makeSessionManager(100, 30 * 60 * 1000);
-    try {
-      const mockServer = { close: mock().mockResolvedValue(undefined) };
-      for (let i = 0; i < 100; i++) {
-        const result = tryAddSession(`session-${i}`, {
-          transport: {},
-          server: mockServer,
-          lastActivityAt: Date.now(),
-        });
-        expect(result.ok).toBe(true);
-      }
-      expect(sessions.size).toBe(100);
-      const result = tryAddSession("session-100", {
-        transport: {},
-        server: mockServer,
-        lastActivityAt: Date.now(),
-      });
-      expect(result.ok).toBe(false);
-      if (!result.ok) expect(result.reason).toBe("max_sessions");
-      expect(sessions.size).toBe(100);
-    } finally {
-      cleanup();
-    }
-  });
-
-  it("allows adding session after one is removed", () => {
-    const { sessions, tryAddSession, cleanup } = makeSessionManager(2, 30 * 60 * 1000);
-    try {
-      const mockServer = { close: mock().mockResolvedValue(undefined) };
-      tryAddSession("s1", { transport: {}, server: mockServer, lastActivityAt: Date.now() });
-      tryAddSession("s2", { transport: {}, server: mockServer, lastActivityAt: Date.now() });
-      expect(sessions.size).toBe(2);
-      sessions.delete("s1");
-      const result = tryAddSession("s3", { transport: {}, server: mockServer, lastActivityAt: Date.now() });
-      expect(result.ok).toBe(true);
-      expect(sessions.size).toBe(2);
-    } finally {
-      cleanup();
-    }
-  });
-
-  it("evicts idle sessions after SESSION_IDLE_MS", async () => {
-    const idleMs = 30 * 60 * 1000;
-    const { sessions, startIdleCleanup, cleanup } = makeSessionManager(100, idleMs);
-    const intervalHandle = startIdleCleanup();
-    const mockClose = mock().mockResolvedValue(undefined);
-    try {
-      const now = Date.now();
-      sessions.set("active", { transport: {}, server: { close: mockClose }, lastActivityAt: now });
-      sessions.set("idle", {
-        transport: {},
-        server: { close: mockClose },
-        lastActivityAt: now - idleMs - 1,
-      });
-      jest.advanceTimersByTime(5 * 60 * 1000 + 1);
-      // Drain microtasks so the close().then() callbacks run
-      await Promise.resolve();
-      await Promise.resolve();
-      expect(sessions.has("idle")).toBe(false);
-      expect(sessions.has("active")).toBe(true);
-      expect(mockClose).toHaveBeenCalledOnce();
-    } finally {
-      clearInterval(intervalHandle);
-      cleanup();
-    }
-  });
-
-  it("touchSession updates lastActivityAt", () => {
-    const { sessions, tryAddSession, touchSession, cleanup } = makeSessionManager(10, 1000);
-    try {
-      const mockServer = { close: mock().mockResolvedValue(undefined) };
-      const initialTime = Date.now();
-      tryAddSession("sess1", { transport: {}, server: mockServer, lastActivityAt: initialTime });
-      jest.advanceTimersByTime(500);
-      touchSession("sess1");
-      const entry = sessions.get("sess1");
-      expect(entry?.lastActivityAt).toBeGreaterThan(initialTime);
-    } finally {
-      cleanup();
-    }
-  });
-
-  it("touchSession returns false for unknown session", () => {
-    const { touchSession, cleanup } = makeSessionManager(10, 1000);
-    try {
-      expect(touchSession("nonexistent")).toBe(false);
-    } finally {
-      cleanup();
-    }
-  });
-
-  it("fake timers advance Date.now() and real timers restore it [QA-07]", () => {
-    const before = Date.now();
-    jest.advanceTimersByTime(60_000);
-    expect(Date.now()).toBeGreaterThanOrEqual(before + 60_000);
-    jest.useRealTimers();
-    const real = Date.now();
-    expect(real).toBeLessThan(before + 60_000);
-    jest.useFakeTimers(); // restore for afterEach
-  });
-
-  it("defers sessions.delete until after server.close() resolves [ERR-13]", async () => {
-    const idleMs = 30 * 60 * 1000;
-    const { sessions, startIdleCleanup, cleanup } = makeSessionManager(100, idleMs);
-
-    let resolveClose!: () => void;
-    const closePromise = new Promise<void>((resolve) => {
-      resolveClose = resolve;
-    });
-    const mockServer = { close: mock().mockImplementation(() => closePromise) };
-
-    sessions.set("idle", {
-      transport: {},
-      server: mockServer,
-      lastActivityAt: Date.now() - idleMs - 1,
-    });
-
-    const intervalHandle = startIdleCleanup();
-    try {
-      jest.advanceTimersByTime(5 * 60 * 1000 + 1);
-
-      // Session should still be in map while close is pending
-      expect(sessions.has("idle")).toBe(true);
-
-      resolveClose();
-      await Promise.resolve();
-      await Promise.resolve();
-
-      // Session removed after close resolves
-      expect(sessions.has("idle")).toBe(false);
-    } finally {
-      clearInterval(intervalHandle);
-      cleanup();
-    }
-  });
-});
-
-describe("POST /mcp auth + session validation", () => {
+describe("POST /mcp auth + body limits", () => {
   let handle: Awaited<ReturnType<typeof startHttpServer>>;
 
   afterEach(async () => {
@@ -763,44 +659,6 @@ describe("POST /mcp auth + session validation", () => {
       Authorization: "Bearer wrong-token",
     });
     expect(status).toBe(401);
-  });
-
-  it("returns 400 for oversized mcp-session-id", async () => {
-    const boot = makeBootstrap();
-    handle = await startHttpServer(boot);
-    const port = await waitForListen(handle.httpServer);
-
-    const { status, body } = await httpPostJsonWithHeaders(`http://127.0.0.1:${port}/mcp`, initBody, {
-      "mcp-session-id": "x".repeat(257),
-    });
-    expect(status).toBe(400);
-    expect((body as { error: string }).error).toBe("Invalid mcp-session-id header");
-  });
-
-  it("returns 404 for unknown mcp-session-id", async () => {
-    const boot = makeBootstrap();
-    handle = await startHttpServer(boot);
-    const port = await waitForListen(handle.httpServer);
-
-    const { status, body } = await httpPostJsonWithHeaders(`http://127.0.0.1:${port}/mcp`, initBody, {
-      "mcp-session-id": "00000000-0000-0000-0000-nonexistent00",
-    });
-    expect(status).toBe(404);
-    expect((body as { error: string }).error).toBe("Session not found");
-  });
-
-  it("creates a session and returns a valid initialize response", async () => {
-    const boot = makeBootstrap();
-    handle = await startHttpServer(boot);
-    const port = await waitForListen(handle.httpServer);
-
-    const { status, body } = await httpPostJsonWithHeaders(`http://127.0.0.1:${port}/mcp`, initBody, {
-      Accept: "application/json, text/event-stream",
-    });
-    expect(status).toBe(200);
-    // Response may be JSON or SSE — either way the payload contains protocolVersion
-    const bodyStr = typeof body === "string" ? body : JSON.stringify(body);
-    expect(bodyStr).toContain("protocolVersion");
   });
 
   it("rejects request bodies over the configured HTTP body limit", async () => {
@@ -843,69 +701,6 @@ describe("POST /mcp auth + session validation", () => {
 
     expect(status).toBe(413);
     expect(body).toEqual({ error: "Payload too large" });
-  });
-});
-
-describe("handleExistingSessionRequest", () => {
-  it("returns 500 when an existing session transport rejects", async () => {
-    const entry = {
-      transport: { handleRequest: mock().mockRejectedValue(new Error("transport failed")) },
-      server: { close: mock() },
-      lastActivityAt: 0,
-    };
-    const json = mock();
-    const status = mock().mockReturnValue({ json });
-    const res = { status, headersSent: false };
-
-    await handleExistingSessionRequest(
-      entry as unknown as Parameters<typeof handleExistingSessionRequest>[0],
-      {} as unknown as Parameters<typeof handleExistingSessionRequest>[1],
-      res as unknown as Parameters<typeof handleExistingSessionRequest>[2],
-      {},
-    );
-
-    expect(status).toHaveBeenCalledWith(500);
-    expect(json).toHaveBeenCalledWith({ error: "Internal server error" });
-  });
-});
-
-describe("handleNewSessionTransportError", () => {
-  it("returns JSON 500 instead of rethrowing to Express [ERR-07]", async () => {
-    const sessions = new Map<string, unknown>([["session-1", {}]]);
-    const close = mock().mockResolvedValue(undefined);
-    const json = mock();
-    const status = mock().mockReturnValue({ json });
-    const res = { status, headersSent: false };
-
-    await handleNewSessionTransportError(
-      "session-1",
-      sessions,
-      { close },
-      res as unknown as Parameters<typeof handleNewSessionTransportError>[3],
-      new Error("transport failed"),
-    );
-
-    expect(sessions.has("session-1")).toBe(false);
-    expect(close).toHaveBeenCalled();
-    expect(status).toHaveBeenCalledWith(500);
-    expect(json).toHaveBeenCalledWith({ error: "Internal server error" });
-  });
-});
-
-describe("closeActiveSessionsForShutdown", () => {
-  it("continues after one session close fails and removes every session [ERR-03]", async () => {
-    const firstClose = mock().mockRejectedValue(new Error("first failed"));
-    const secondClose = mock().mockResolvedValue(undefined);
-    const sessions = new Map([
-      ["first", { server: { close: firstClose } }],
-      ["second", { server: { close: secondClose } }],
-    ]);
-
-    await expect(closeActiveSessionsForShutdown(sessions)).resolves.toBeUndefined();
-
-    expect(firstClose).toHaveBeenCalled();
-    expect(secondClose).toHaveBeenCalled();
-    expect(sessions.size).toBe(0);
   });
 });
 

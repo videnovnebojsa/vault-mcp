@@ -18,8 +18,8 @@ All configuration is via environment variables. Zero required configuration - th
 | `MCP_HOST` | `127.0.0.1` | Bind address (`0.0.0.0` to expose on the network) |
 | `MCP_API_KEY` | _(empty)_ | Bearer token for auth; leave empty for local-only use |
 | `MCP_HTTP_BODY_LIMIT_BYTES` | `1048576` | Max request body size in bytes |
-| `MCP_MAX_SESSIONS` | `100` | Max concurrent HTTP sessions |
-| `MCP_SESSION_IDLE_MS` | `1800000` | Session idle timeout in milliseconds (30 min) |
+
+The HTTP transport is **stateless** (no MCP sessions) — see [ADR-0003](adr/0003-stateless-http-sessions.md). There is nothing to tune for session limits or idle timeouts.
 
 ## Vector Embeddings
 

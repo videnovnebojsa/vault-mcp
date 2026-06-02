@@ -197,7 +197,6 @@ const MCP_HEADERS = {
   Accept: "application/json, text/event-stream",
 };
 
-let sessionId: string | null = null;
 let msgId = 0;
 
 /** POST a JSON-RPC message to /mcp. */
@@ -205,7 +204,7 @@ async function rpc(method: string, params: Record<string, unknown>): Promise<Res
   const id = ++msgId;
   return fetch(`${BASE_URL}/mcp`, {
     method: "POST",
-    headers: sessionId ? { ...MCP_HEADERS, "mcp-session-id": sessionId } : MCP_HEADERS,
+    headers: MCP_HEADERS,
     body: JSON.stringify({ jsonrpc: "2.0", id, method, params }),
   });
 }
@@ -213,7 +212,7 @@ async function rpc(method: string, params: Record<string, unknown>): Promise<Res
 async function notify(method: string, params: Record<string, unknown> = {}): Promise<Response> {
   return fetch(`${BASE_URL}/mcp`, {
     method: "POST",
-    headers: sessionId ? { ...MCP_HEADERS, "mcp-session-id": sessionId } : MCP_HEADERS,
+    headers: MCP_HEADERS,
     body: JSON.stringify({ jsonrpc: "2.0", method, params }),
   });
 }
@@ -311,7 +310,6 @@ if (!initRes.ok) {
   console.error(`FAIL: initialize returned HTTP ${initRes.status}`);
   process.exit(1);
 }
-sessionId = initRes.headers.get("mcp-session-id");
 console.log("OK  initialize");
 
 const initializedRes = await notify("notifications/initialized");

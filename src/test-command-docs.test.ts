@@ -58,4 +58,21 @@ describe("documented test commands", () => {
     expect(integration).toContain('process.on("SIGTERM"');
     expect(integration).toContain("cleanupAndExit");
   });
+
+  it("keeps the /health source comment aligned with stateless mode [API-01]", () => {
+    const httpSource = fs.readFileSync(path.join(process.cwd(), "src/http.ts"), "utf8");
+
+    expect(httpSource).not.toContain("session count");
+    expect(httpSource).not.toContain("session counts");
+  });
+
+  it("removes stale mcp-session-id handling from smoke and integration scripts [ARCH-02]", () => {
+    const smoke = fs.readFileSync(path.join(process.cwd(), "scripts/smoke-test.ts"), "utf8");
+    const integration = fs.readFileSync(path.join(process.cwd(), "scripts/integration-test.ts"), "utf8");
+
+    expect(smoke).not.toContain("mcp-session-id");
+    expect(smoke).not.toContain("sessionId");
+    expect(integration).not.toContain("mcp-session-id");
+    expect(integration).not.toContain("sessionId = initRes.headers.get");
+  });
 });

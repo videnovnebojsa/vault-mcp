@@ -9,6 +9,7 @@ the old one (and update the old one's status to `Superseded by ADR-NNNN`).
 | ADR | Title | Status |
 | --- | --- | --- |
 | [0001](0001-decline-standalone-get-sse-stream.md) | Decline the standalone GET SSE stream (return 405 on `GET /mcp`) | Accepted |
+| [0003](0003-stateless-http-sessions.md) | Run the HTTP transport in stateless mode (no MCP sessions) | Accepted |
 
 ## Format
 

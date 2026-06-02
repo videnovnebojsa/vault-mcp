@@ -4,6 +4,18 @@ All notable changes to this project will be documented in this file.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.0] - 2026-06-02
+
+### Changed
+- The HTTP MCP transport now runs in **stateless** mode. Each `POST /mcp` is served by a fresh per-request `McpServer` + `StreamableHTTPServerTransport` (no `sessionIdGenerator`), so no `mcp-session-id` is issued or required and a stale id from a reconnecting client is ignored. This eliminates `404 "Session not found"` — a client can no longer fail mid-conversation after an idle gap or a server restart, which previously caused the Claude Desktop bridge to exit and drop an in-flight tool call. Applies to every local client (bridge, Claude Code, Codex). Rationale in [ADR-0003](docs/adr/0003-stateless-http-sessions.md).
+- `DELETE /mcp` now returns `200` (no session to tear down); `GET` still returns `405` (ADR-0001).
+- `/health` no longer reports a `sessions` field (there are no sessions to count).
+
+### Removed
+- `MCP_MAX_SESSIONS` and `MCP_SESSION_IDLE_MS` configuration — there is no session map to bound or evict in stateless mode.
+
+[0.2.0]: https://github.com/videnovnebojsa/vault-mcp/compare/v0.1.4...v0.2.0
+
 ## [0.1.4] - 2026-06-02
 
 ### Fixed

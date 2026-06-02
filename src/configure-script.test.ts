@@ -252,16 +252,16 @@ describe("validateSetting", () => {
   });
 
   it("accepts valid integer in range [CFG-28]", async () => {
-    const s = findSetting("MCP_MAX_SESSIONS");
-    expect(await validateSetting(s, "1")).toBeNull();
-    expect(await validateSetting(s, "100")).toBeNull();
-    expect(await validateSetting(s, "10000")).toBeNull();
+    const s = findSetting("MCP_HTTP_BODY_LIMIT_BYTES");
+    expect(await validateSetting(s, "1024")).toBeNull();
+    expect(await validateSetting(s, "1048576")).toBeNull();
+    expect(await validateSetting(s, "104857600")).toBeNull();
   });
 
   it("rejects integer out of range [CFG-29]", async () => {
-    const s = findSetting("MCP_MAX_SESSIONS");
-    expect(await validateSetting(s, "0")).not.toBeNull();
-    expect(await validateSetting(s, "99999")).not.toBeNull();
+    const s = findSetting("MCP_HTTP_BODY_LIMIT_BYTES");
+    expect(await validateSetting(s, "1023")).not.toBeNull();
+    expect(await validateSetting(s, "104857601")).not.toBeNull();
     expect(await validateSetting(s, "3.14")).not.toBeNull();
   });
 

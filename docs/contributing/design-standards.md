@@ -121,15 +121,22 @@ vaultSync.handleUpsert(path).catch(...);
 `VaultManager.shutdown()` awaits `Promise.allSettled(inflightSyncs)` before closing stores.
 This prevents WAL corruption when Claude shuts down during a sync.
 
-### 1.6 HTTP Session Management
+### 1.6 HTTP Transport (stateless)
 
-Sessions are bounded and time-limited:
+The HTTP transport runs in the MCP SDK's **stateless** mode — see
+[ADR-0003](../adr/0003-stateless-http-sessions.md). Each `POST /mcp` builds a fresh
+`StreamableHTTPServerTransport` (no `sessionIdGenerator`) but borrows its `McpServer` from a
+bounded pool of warmed instances, connects them, handles the one request, then closes the
+transport and returns the server to the pool:
 
-- `MAX_SESSIONS` (env: `MCP_MAX_SESSIONS`, default 100) — 429 on overflow
-- `SESSION_IDLE_MS` (env: `MCP_SESSION_IDLE_MS`, default 30 min) — idle eviction every 5 min
-- Session IDs logged as first 8 characters only (prevent session hijacking via log access)
-- `server` is created BEFORE `transport` (prevents race where `onsessioninitialized` fires
-  before `server` is assigned)
+- No `mcp-session-id` is issued or required; a stale id from a reconnecting client is ignored.
+- There is no session map, no idle eviction, and no `404` session path — so a client never sees
+  "Session not found" after an idle gap or a server restart.
+- Heavy state (vault repository, search index, file watcher) is a shared singleton from
+  `boot.vaultManager`. The `McpServer` is pooled (not rebuilt per request), so its 21 tool/resource
+  registrations are not repeated on the hot path; the SDK allows re-`connect()` after `close()`.
+- The pool is bounded by `MCP_MAX_CONCURRENT_REQUESTS` (default 100); exceeding it returns `429`,
+  which is the only concurrency cap (it replaces the removed `MCP_MAX_SESSIONS`).
 
 ### 1.7 Schema Migrations
 

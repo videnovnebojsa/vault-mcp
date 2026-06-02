@@ -90,14 +90,10 @@ try {
 }
 console.log("OK: initialize");
 
-// Extract session ID for subsequent requests
-const sessionId = initRes.headers.get("mcp-session-id");
-const sessionHeaders = sessionId ? { ...mcpHeaders, "mcp-session-id": sessionId } : mcpHeaders;
-
 // Test MCP tools/list via HTTP (response is SSE: parse the first data: line)
 const mcpRes = await fetch("http://localhost:3783/mcp", {
   method: "POST",
-  headers: sessionHeaders,
+  headers: mcpHeaders,
   body: JSON.stringify({ jsonrpc: "2.0", id: 2, method: "tools/list", params: {} }),
 });
 try {
