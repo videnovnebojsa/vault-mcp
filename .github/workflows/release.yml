@@ -65,11 +65,54 @@ jobs:
     permissions:
       contents: write
     steps:
+      - name: Check out repository (for CHANGELOG)
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+        with:
+          # Match the build job: read CHANGELOG.md from the released tag, not the
+          # branch a workflow_dispatch run was triggered from.
+          ref: ${{ github.event.inputs.tag || github.ref }}
+
       - name: Download all binaries
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c  # v8.0.1
         with:
           path: dist-bin
           merge-multiple: true
+
+      - name: Build release notes from CHANGELOG
+        env:
+          TAG: ${{ github.event.inputs.tag || github.ref_name }}
+        shell: bash
+        run: |
+          VERSION="${TAG#v}"
+          esc="${VERSION//./\\.}"
+          # Extract the "## [VERSION]" section: everything between that heading and the next
+          # "## [" heading, minus the trailing "[VERSION]: <compare-url>" reference link, then
+          # trim leading/trailing blank lines (portable awk — works on BSD and GNU).
+          {
+            echo "## What's changed"
+            echo
+            awk -v hdr="## [${VERSION}]" '
+              /^## \[/ { if (started) exit; if (substr($0, 1, length(hdr)) == hdr) { started = 1; next } }
+              started { print }
+            ' CHANGELOG.md \
+              | grep -vE "^\[${esc}\]: " \
+              | awk 'NF || f { f = 1; print }' \
+              | awk 'NF { p = NR } { a[NR] = $0 } END { for (i = 1; i <= p; i++) print a[i] }'
+            # Reuse the CHANGELOG's own compare URL for the "Full diff" link.
+            COMPARE=$(grep -E "^\[${esc}\]: " CHANGELOG.md | head -1 | sed -E "s/^\[[^]]*\]: //")
+            if [ -n "$COMPARE" ]; then
+              DIFFTXT=$(printf '%s' "$COMPARE" | sed -E 's#.*/compare/##')
+              echo
+              echo "**Full diff:** [\`${DIFFTXT}\`](${COMPARE})"
+            fi
+          } > RELEASE_NOTES.md
+          echo "----- generated release notes -----"
+          cat RELEASE_NOTES.md
+          # Guard: never publish a near-empty body if the CHANGELOG section is missing.
+          if ! grep -q '^### ' RELEASE_NOTES.md; then
+            echo "::error::No CHANGELOG section found for ${VERSION} — add one before tagging." >&2
+            exit 1
+          fi
 
       - name: Create release with assets
         env:
@@ -82,7 +125,7 @@ jobs:
             --repo "$REPO" \
             --prerelease \
             --title "$TAG" \
-            --notes "See [CHANGELOG](https://github.com/${REPO}/blob/main/CHANGELOG.md) for details." \
+            --notes-file RELEASE_NOTES.md \
             dist-bin/vault-mcp-linux-x64 \
             dist-bin/vault-mcp-macos-arm64 \
             dist-bin/vault-mcp-macos-x64 \
