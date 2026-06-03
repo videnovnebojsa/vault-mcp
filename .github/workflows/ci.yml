@@ -64,10 +64,14 @@ jobs:
           #   PSAvoidUsingWriteHost                       — installers print to the host on purpose
           #   PSUseApprovedVerbs                          — Prompt-Input is a deliberate local helper name
           #   PSUseShouldProcessForStateChangingFunctions — this is a script, not a cmdlet module
+          #   PSUseSingularNouns                          — Invoke-Schtasks mirrors the schtasks command name
+          #   PSUseBOMForUnicodeEncodedFile               — a BOM would be injected into the `irm | iex` string
           $excluded = @(
             'PSAvoidUsingWriteHost',
             'PSUseApprovedVerbs',
-            'PSUseShouldProcessForStateChangingFunctions'
+            'PSUseShouldProcessForStateChangingFunctions',
+            'PSUseSingularNouns',
+            'PSUseBOMForUnicodeEncodedFile'
           )
           $results = Invoke-ScriptAnalyzer -Path install.ps1 -Severity Warning, Error -ExcludeRule $excluded
           if ($results) {

@@ -62,7 +62,8 @@ function Invoke-Schtasks([string[]]$SchtasksArgs) {
     $prev = $ErrorActionPreference
     $ErrorActionPreference = 'Continue'
     try {
-        & schtasks @SchtasksArgs 2>&1 | Out-Null
+        # Capture combined output so callers can surface schtasks' own message on failure.
+        $script:SchtasksOutput = (& schtasks @SchtasksArgs 2>&1 | Out-String).Trim()
         return $LASTEXITCODE
     } finally {
         $ErrorActionPreference = $prev
@@ -252,30 +253,43 @@ if ($taskRegistered -and $Configure) {
         $xmlPath = Join-Path $env:TEMP "vault-mcp-task.xml"
         $xml = @"
 <?xml version="1.0" encoding="UTF-16"?>
-<Task version="1.3" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
+<Task version="1.2" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
+  <RegistrationInfo>
+    <Description>vault-mcp MCP server</Description>
+  </RegistrationInfo>
   <Triggers>
-    <LogonTrigger><Enabled>true</Enabled></LogonTrigger>
+    <LogonTrigger>
+      <Enabled>true</Enabled>
+    </LogonTrigger>
   </Triggers>
-  <Actions>
-    <Exec>
-      <Command>$BIN_PATH</Command>
-      <WorkingDirectory>$CFG_DIR</WorkingDirectory>
-    </Exec>
-  </Actions>
+  <Principals>
+    <Principal id="Author">
+      <LogonType>InteractiveToken</LogonType>
+      <RunLevel>LeastPrivilege</RunLevel>
+    </Principal>
+  </Principals>
   <Settings>
     <MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy>
+    <StartWhenAvailable>true</StartWhenAvailable>
     <ExecutionTimeLimit>PT0S</ExecutionTimeLimit>
+    <Enabled>true</Enabled>
     <RestartOnFailure>
       <Interval>PT30S</Interval>
       <Count>999</Count>
     </RestartOnFailure>
   </Settings>
+  <Actions Context="Author">
+    <Exec>
+      <Command>$BIN_PATH</Command>
+      <WorkingDirectory>$CFG_DIR</WorkingDirectory>
+    </Exec>
+  </Actions>
 </Task>
 "@
         $xml | Set-Content -Path $xmlPath -Encoding Unicode
         $rc = Invoke-Schtasks @("/Create", "/TN", "vault-mcp", "/XML", $xmlPath, "/F")
         Remove-Item $xmlPath -Force
-        if ($rc -ne 0) { Write-Err "Failed to register scheduled task (schtasks exit code $rc)" }
+        if ($rc -ne 0) { Write-Err "Failed to register scheduled task (schtasks exit code $rc): $script:SchtasksOutput" }
         if ((Invoke-Schtasks @("/Run", "/TN", "vault-mcp")) -ne 0) {
             Write-Warn "Service registered but did not start — it will start at next logon, or run: schtasks /Run /TN vault-mcp"
         } else {
