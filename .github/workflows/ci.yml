@@ -51,6 +51,35 @@ jobs:
           scandir: "."
           severity: warning
 
+  psscriptanalyzer:
+    name: Lint PowerShell
+    runs-on: ubuntu-latest  # pwsh is preinstalled on GitHub runners
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+      - name: Run PSScriptAnalyzer
+        shell: pwsh
+        run: |
+          Install-Module PSScriptAnalyzer -Force -Scope CurrentUser -ErrorAction Stop
+          # Excluded rules are idiomatic for an interactive installer, not defects:
+          #   PSAvoidUsingWriteHost                       — installers print to the host on purpose
+          #   PSUseApprovedVerbs                          — Prompt-Input is a deliberate local helper name
+          #   PSUseShouldProcessForStateChangingFunctions — this is a script, not a cmdlet module
+          #   PSUseSingularNouns                          — Invoke-Schtasks mirrors the schtasks command name
+          #   PSUseBOMForUnicodeEncodedFile               — a BOM would be injected into the `irm | iex` string
+          $excluded = @(
+            'PSAvoidUsingWriteHost',
+            'PSUseApprovedVerbs',
+            'PSUseShouldProcessForStateChangingFunctions',
+            'PSUseSingularNouns',
+            'PSUseBOMForUnicodeEncodedFile'
+          )
+          $results = Invoke-ScriptAnalyzer -Path install.ps1 -Severity Warning, Error -ExcludeRule $excluded
+          if ($results) {
+            $results | Format-Table -AutoSize | Out-String | Write-Host
+            throw "PSScriptAnalyzer found $($results.Count) issue(s) in install.ps1"
+          }
+          Write-Host 'OK: PSScriptAnalyzer clean'
+
   dead-code:
     name: Dead Code
     runs-on: ubuntu-latest
@@ -183,3 +212,63 @@ jobs:
       # starts the binary, and exercises 17 tool calls with real assertions.
       - name: Run integration test
         run: INTEGRATION_TEST_PORT=34782 bun run scripts/integration-test.ts ~/.local/bin/vault-mcp
+
+  integration-windows:
+    name: Integration (Windows install.ps1)
+    needs: [test, audit]
+    runs-on: windows-latest
+    if: |
+      github.event_name == 'push' ||
+      github.event_name == 'pull_request'
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6  # v2
+        with: { bun-version: "1.x" }
+      - run: bun install --frozen-lockfile
+
+      # Build a native Windows binary to stage via -LocalBin (no GitHub download).
+      - name: Build Windows binary
+        run: bun run build:bun
+        env:
+          BUN_BINARY_NAME: vault-mcp-windows-x64.exe
+
+      - name: Create install-time vault
+        shell: pwsh
+        run: New-Item -ItemType Directory -Force -Path C:\vault-install | Out-Null
+
+      # Installer prompt answers, one per line: vault path, port, API key (empty),
+      # embeddings (N), background service (Y). Answering Y to the service prompt
+      # exercises the schtasks /Query-when-absent path that previously aborted the
+      # installer under $ErrorActionPreference='Stop' — this is the regression guard.
+      - name: Stage installer answers
+        shell: pwsh
+        run: Set-Content ci-answers.txt -Value @('C:\vault-install', '3782', '', 'N', 'Y')
+
+      # Invoke via cmd so install.ps1 keeps its own $ErrorActionPreference='Stop'
+      # (a GitHub `shell: pwsh` step would override it) — faithfully reproducing
+      # the end-user environment where the bug surfaced.
+      - name: Run install.ps1 (-LocalBin, service registration)
+        shell: cmd
+        run: type ci-answers.txt | pwsh -NoProfile -ExecutionPolicy Bypass -File install.ps1 -LocalBin dist-bin\vault-mcp-windows-x64.exe
+
+      - name: Assert install result
+        shell: pwsh
+        run: |
+          $bin = Join-Path $env:LOCALAPPDATA 'vault-mcp\vault-mcp.exe'
+          if (-not (Test-Path $bin)) { throw "FAIL: binary not staged at $bin" }
+          $envFile = Join-Path $env:APPDATA 'vault-mcp\.env'
+          if (-not (Test-Path $envFile)) { throw "FAIL: .env not written to $envFile" }
+          $content = Get-Content $envFile -Raw
+          if ($content -notmatch 'OBSIDIAN_VAULT_PATH=') { throw 'FAIL: OBSIDIAN_VAULT_PATH missing from .env' }
+          if ($content -notmatch 'MCP_PORT=3782')        { throw 'FAIL: MCP_PORT missing from .env' }
+          if ($content -match 'VAULT_DEFAULT_PATH')       { throw 'FAIL: stale VAULT_DEFAULT_PATH in .env' }
+          # The scheduled task must exist — proves the installer ran past the
+          # schtasks /Query-when-absent check and /Create succeeded.
+          schtasks /Query /TN vault-mcp 2>&1 | Out-Null
+          if ($LASTEXITCODE -ne 0) { throw 'FAIL: vault-mcp scheduled task was not registered' }
+          Write-Host 'OK: binary staged, .env correct, scheduled task registered'
+
+      - name: Clean up scheduled task
+        if: always()
+        shell: pwsh
+        run: schtasks /Delete /TN vault-mcp /F 2>&1 | Out-Null; exit 0
