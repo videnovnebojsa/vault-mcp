@@ -62,6 +62,10 @@ function Invoke-Schtasks([string[]]$SchtasksArgs) {
     $prev = $ErrorActionPreference
     $ErrorActionPreference = 'Continue'
     try {
+        # Reset to a sentinel first: if schtasks fails to launch at all, $LASTEXITCODE
+        # retains the previous native command's value and a stale 0 would be misread as
+        # success. Seeding non-zero means a no-launch is reported as failure.
+        $global:LASTEXITCODE = -1
         # Capture combined output so callers can surface schtasks' own message on failure.
         $script:SchtasksOutput = (& schtasks @SchtasksArgs 2>&1 | Out-String).Trim()
         return $LASTEXITCODE
