@@ -320,6 +320,26 @@ Write-Host @"
 }
 "@
 
+Write-Host ""
+Write-Host "Connect Claude Desktop" -ForegroundColor White
+Write-Host ("─" * 22)
+Write-Host "Claude Desktop speaks stdio, not HTTP — use the bundled bridge."
+Write-Host "Add to " -NoNewline; Write-Host "claude_desktop_config.json" -ForegroundColor Cyan -NoNewline; Write-Host ":"
+# Escape backslashes so the Windows binary path is valid JSON.
+$binJson = $BIN_PATH -replace '\\', '\\'
+Write-Host @"
+{
+  "mcpServers": {
+    "vault": {
+      "command": "$binJson",
+      "args": ["bridge"],
+      "env": { "VAULT_MCP_URL": "http://127.0.0.1:$MCP_PORT/mcp" }
+    }
+  }
+}
+"@
+
+Write-Host ""
 Write-Host "Verify" -ForegroundColor White
 Write-Host ("─" * 6)
 Write-Host "  " -NoNewline; Write-Host "curl http://localhost:$MCP_PORT/health" -ForegroundColor Cyan
