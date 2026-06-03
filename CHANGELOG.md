@@ -4,6 +4,13 @@ All notable changes to this project will be documented in this file.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.2] - 2026-06-03
+
+### Fixed
+- Windows installer (`install.ps1`) now prints Claude Desktop connection instructions. It previously emitted only the HTTP `.mcp.json` snippet — correct for Claude Code, but misleading for Claude Desktop, which connects over stdio rather than HTTP. The installer now also shows the stdio bridge config (`command` + `args: ["bridge"]` + `VAULT_MCP_URL`), matching `install.sh`, with the Windows binary path's backslashes escaped so the emitted JSON is valid.
+
+[0.2.2]: https://github.com/videnovnebojsa/vault-mcp/compare/v0.2.1...v0.2.2
+
 ## [0.2.1] - 2026-06-03
 
 ### Fixed
