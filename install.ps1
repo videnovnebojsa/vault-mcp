@@ -240,22 +240,21 @@ if ($userPath -notlike "*$BIN_DIR*") {
 if ($NoService) {
     Write-Step "Service install skipped (-NoService)"
 } else {
+    # Check if task already exists (schtasks errors when absent — Invoke-Schtasks handles it)
+    $taskRegistered = (Invoke-Schtasks @("/Query", "/TN", "vault-mcp")) -eq 0
 
-# Check if task already exists (schtasks errors when absent — Invoke-Schtasks handles it)
-$taskRegistered = (Invoke-Schtasks @("/Query", "/TN", "vault-mcp")) -eq 0
-
-if ($taskRegistered -and $Configure) {
-    [void](Invoke-Schtasks @("/End", "/TN", "vault-mcp"))
-    if ((Invoke-Schtasks @("/Run", "/TN", "vault-mcp")) -ne 0) {
-        Write-Warn "Could not restart the service — start it with: schtasks /Run /TN vault-mcp"
+    if ($taskRegistered -and $Configure) {
+        [void](Invoke-Schtasks @("/End", "/TN", "vault-mcp"))
+        if ((Invoke-Schtasks @("/Run", "/TN", "vault-mcp")) -ne 0) {
+            Write-Warn "Could not restart the service — start it with: schtasks /Run /TN vault-mcp"
+        } else {
+            Write-Ok "Service restarted with new config"
+        }
     } else {
-        Write-Ok "Service restarted with new config"
-    }
-} else {
-    $answer = Prompt-Input "Install as a background service (auto-starts at login)? [Y/n]" "Y"
-    if ($answer -notmatch '^[Nn]') {
-        $xmlPath = Join-Path $env:TEMP "vault-mcp-task.xml"
-        $xml = @"
+        $answer = Prompt-Input "Install as a background service (auto-starts at login)? [Y/n]" "Y"
+        if ($answer -notmatch '^[Nn]') {
+            $xmlPath = Join-Path $env:TEMP "vault-mcp-task.xml"
+            $xml = @"
 <?xml version="1.0" encoding="UTF-16"?>
 <Task version="1.2" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
   <RegistrationInfo>
@@ -290,23 +289,22 @@ if ($taskRegistered -and $Configure) {
   </Actions>
 </Task>
 "@
-        $xml | Set-Content -Path $xmlPath -Encoding Unicode
-        $rc = Invoke-Schtasks @("/Create", "/TN", "vault-mcp", "/XML", $xmlPath, "/F")
-        Remove-Item $xmlPath -Force
-        if ($rc -ne 0) { Write-Err "Failed to register scheduled task (schtasks exit code $rc): $script:SchtasksOutput" }
-        if ((Invoke-Schtasks @("/Run", "/TN", "vault-mcp")) -ne 0) {
-            Write-Warn "Service registered but did not start — it will start at next logon, or run: schtasks /Run /TN vault-mcp"
+            $xml | Set-Content -Path $xmlPath -Encoding Unicode
+            $rc = Invoke-Schtasks @("/Create", "/TN", "vault-mcp", "/XML", $xmlPath, "/F")
+            Remove-Item $xmlPath -Force
+            if ($rc -ne 0) { Write-Err "Failed to register scheduled task (schtasks exit code $rc): $script:SchtasksOutput" }
+            if ((Invoke-Schtasks @("/Run", "/TN", "vault-mcp")) -ne 0) {
+                Write-Warn "Service registered but did not start — it will start at next logon, or run: schtasks /Run /TN vault-mcp"
+            } else {
+                Write-Ok "Service registered in Task Scheduler and started"
+            }
+            Write-Host "  Restart: " -NoNewline
+            Write-Host 'schtasks /End /TN vault-mcp; schtasks /Run /TN vault-mcp' -ForegroundColor Cyan
         } else {
-            Write-Ok "Service registered in Task Scheduler and started"
+            Write-Step "Service install skipped. Start manually: vault-mcp"
         }
-        Write-Host "  Restart: " -NoNewline
-        Write-Host 'schtasks /End /TN vault-mcp; schtasks /Run /TN vault-mcp' -ForegroundColor Cyan
-    } else {
-        Write-Step "Service install skipped. Start manually: vault-mcp"
     }
 }
-
-}  # end -NoService check
 
 # ─── Step 7: Connection instructions ─────────────────────────────────────────
 
