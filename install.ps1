@@ -2,14 +2,18 @@
 #
 # Usage:
 #   irm https://raw.githubusercontent.com/videnovnebojsa/vault-mcp/main/install.ps1 | iex
-#   .\install.ps1               # install or upgrade
-#   .\install.ps1 -Configure    # reconfigure only (skip binary download)
+#   .\install.ps1                      # install or upgrade
+#   .\install.ps1 -Configure           # reconfigure only (skip binary download)
+#   .\install.ps1 -LocalBin <path>     # stage a locally built binary (skip download; CI/dev)
+#   .\install.ps1 -NoService           # skip background service prompt (useful for CI)
 #
 # Requires: PowerShell 5.1+, Windows x64
 
 [CmdletBinding()]
 param(
-    [switch]$Configure   # skip binary download, reconfigure only
+    [switch]$Configure,     # skip binary download, reconfigure only
+    [string]$LocalBin = "", # stage a locally built binary instead of downloading (CI/dev)
+    [switch]$NoService      # skip background service installation prompt (useful for CI)
 )
 
 $ErrorActionPreference = 'Stop'
@@ -49,6 +53,22 @@ function Prompt-Input([string]$Message, [string]$Default) {
     return $userInput
 }
 
+# schtasks writes to stderr (and returns non-zero) when a task is absent — expected on
+# a first install. Under $ErrorActionPreference='Stop' that stderr surfaces as a
+# terminating NativeCommandError and aborts the script before the task is registered.
+# Run schtasks with the error preference relaxed and stderr merged into stdout so we
+# observe the exit code instead of throwing.
+function Invoke-Schtasks([string[]]$SchtasksArgs) {
+    $prev = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    try {
+        & schtasks @SchtasksArgs 2>&1 | Out-Null
+        return $LASTEXITCODE
+    } finally {
+        $ErrorActionPreference = $prev
+    }
+}
+
 # ─── Banner ───────────────────────────────────────────────────────────────────
 
 Write-Host ""
@@ -64,7 +84,16 @@ if (-not [Environment]::Is64BitOperatingSystem) {
 
 # ─── Steps 2-4: Download binary ───────────────────────────────────────────────
 
-if (-not $Configure) {
+if (-not $Configure -and $LocalBin) {
+    # ─── Local binary mode (-LocalBin) ──────────────────────────────────────────
+    # Used by CI and local dev builds — skips GitHub download entirely.
+    if (-not (Test-Path $LocalBin -PathType Leaf)) { Write-Err "Local binary not found: $LocalBin" }
+    New-Item -ItemType Directory -Force -Path $BIN_DIR | Out-Null
+    New-Item -ItemType Directory -Force -Path $CFG_DIR | Out-Null
+    Copy-Item -Force -Path $LocalBin -Destination $BIN_PATH
+    Set-Content -Path $VER_FILE -Value "local" -NoNewline
+    Write-Ok "Binary staged from $LocalBin → $BIN_PATH (local)"
+} elseif (-not $Configure) {
     Write-Step "Checking latest release..."
     $release = Invoke-RestMethod -Uri "https://api.github.com/repos/$REPO/releases/latest"
     $LATEST_TAG = $release.tag_name
@@ -203,13 +232,20 @@ if ($userPath -notlike "*$BIN_DIR*") {
     Write-Ok "Added $BIN_DIR to your user PATH (restart your terminal to take effect)"
 }
 
-# Check if task already exists
-schtasks /Query /TN "vault-mcp" 2>$null | Out-Null; $taskRegistered = $LASTEXITCODE -eq 0
+if ($NoService) {
+    Write-Step "Service install skipped (-NoService)"
+} else {
+
+# Check if task already exists (schtasks errors when absent — Invoke-Schtasks handles it)
+$taskRegistered = (Invoke-Schtasks @("/Query", "/TN", "vault-mcp")) -eq 0
 
 if ($taskRegistered -and $Configure) {
-    schtasks /End /TN "vault-mcp" 2>$null | Out-Null
-    schtasks /Run /TN "vault-mcp" | Out-Null
-    Write-Ok "Service restarted with new config"
+    [void](Invoke-Schtasks @("/End", "/TN", "vault-mcp"))
+    if ((Invoke-Schtasks @("/Run", "/TN", "vault-mcp")) -ne 0) {
+        Write-Warn "Could not restart the service — start it with: schtasks /Run /TN vault-mcp"
+    } else {
+        Write-Ok "Service restarted with new config"
+    }
 } else {
     $answer = Prompt-Input "Install as a background service (auto-starts at login)? [Y/n]" "Y"
     if ($answer -notmatch '^[Nn]') {
@@ -237,16 +273,22 @@ if ($taskRegistered -and $Configure) {
 </Task>
 "@
         $xml | Set-Content -Path $xmlPath -Encoding Unicode
-        schtasks /Create /TN "vault-mcp" /XML $xmlPath /F | Out-Null
-        schtasks /Run /TN "vault-mcp" | Out-Null
+        $rc = Invoke-Schtasks @("/Create", "/TN", "vault-mcp", "/XML", $xmlPath, "/F")
         Remove-Item $xmlPath -Force
-        Write-Ok "Service registered in Task Scheduler and started"
+        if ($rc -ne 0) { Write-Err "Failed to register scheduled task (schtasks exit code $rc)" }
+        if ((Invoke-Schtasks @("/Run", "/TN", "vault-mcp")) -ne 0) {
+            Write-Warn "Service registered but did not start — it will start at next logon, or run: schtasks /Run /TN vault-mcp"
+        } else {
+            Write-Ok "Service registered in Task Scheduler and started"
+        }
         Write-Host "  Restart: " -NoNewline
         Write-Host 'schtasks /End /TN vault-mcp; schtasks /Run /TN vault-mcp' -ForegroundColor Cyan
     } else {
         Write-Step "Service install skipped. Start manually: vault-mcp"
     }
 }
+
+}  # end -NoService check
 
 # ─── Step 7: Connection instructions ─────────────────────────────────────────
 
