@@ -274,7 +274,7 @@ if ($taskRegistered -and $Configure) {
     <ExecutionTimeLimit>PT0S</ExecutionTimeLimit>
     <Enabled>true</Enabled>
     <RestartOnFailure>
-      <Interval>PT30S</Interval>
+      <Interval>PT1M</Interval>
       <Count>999</Count>
     </RestartOnFailure>
   </Settings>
