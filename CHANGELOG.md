@@ -4,6 +4,17 @@ All notable changes to this project will be documented in this file.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.1] - 2026-06-03
+
+### Fixed
+- Windows installer (`install.ps1`) no longer aborts on a first install. `schtasks /Query` writes to stderr when the scheduled task does not yet exist, which under `$ErrorActionPreference='Stop'` surfaced as a terminating `NativeCommandError` and killed the script before the background service was registered. All `schtasks` calls now route through a wrapper that observes the exit code (seeded to a non-zero sentinel first, so a failure to launch is never misread as success) instead of throwing.
+- The background-service task now registers successfully. The generated Task Scheduler XML was missing required elements (`RegistrationInfo`, `Principals`, and the `Actions` context) and used a restart interval below the enforced 1-minute minimum, so `schtasks /Create` rejected it on every machine that reached this step. On failure the installer now surfaces `schtasks`' own error message.
+
+### Added
+- `install.ps1` gains `-LocalBin <path>` and `-NoService` flags (mirroring `install.sh`) so it can run unattended, plus CI jobs that lint the script with PSScriptAnalyzer and run it end-to-end on a Windows runner — the regression guard that surfaced the task-registration failures above.
+
+[0.2.1]: https://github.com/videnovnebojsa/vault-mcp/compare/v0.2.0...v0.2.1
+
 ## [0.2.0] - 2026-06-02
 
 ### Changed
