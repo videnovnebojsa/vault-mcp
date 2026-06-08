@@ -266,7 +266,37 @@ jobs:
           # schtasks /Query-when-absent check and /Create succeeded.
           schtasks /Query /TN vault-mcp 2>&1 | Out-Null
           if ($LASTEXITCODE -ne 0) { throw 'FAIL: vault-mcp scheduled task was not registered' }
-          Write-Host 'OK: binary staged, .env correct, scheduled task registered'
+          # The hidden-launch shim must be staged next to the binary (console-window fix).
+          $vbs = Join-Path $env:LOCALAPPDATA 'vault-mcp\launch-hidden.vbs'
+          if (-not (Test-Path $vbs)) { throw "FAIL: launch-hidden.vbs not staged at $vbs" }
+          $vbsBody = Get-Content $vbs -Raw
+          if ($vbsBody -notmatch 'WScript\.Shell')      { throw 'FAIL: launch-hidden.vbs missing WScript.Shell launcher' }
+          if ($vbsBody -notmatch [regex]::Escape($bin)) { throw 'FAIL: launch-hidden.vbs does not reference the binary path' }
+          # ", 0, False" is the window-style-0 (hidden), non-blocking Run signature.
+          if ($vbsBody -notmatch ', 0, False')          { throw 'FAIL: launch-hidden.vbs not launching with a hidden window (style 0)' }
+          # The task must launch via the hidden wscript shim, never the console exe directly.
+          $action = (Get-ScheduledTask -TaskName vault-mcp).Actions[0]
+          if ($action.Execute -notmatch 'wscript\.exe')         { throw "FAIL: task launches '$($action.Execute)', not wscript.exe (console window would appear)" }
+          if ($action.Arguments -notmatch 'launch-hidden\.vbs') { throw "FAIL: task does not pass launch-hidden.vbs to wscript (args: '$($action.Arguments)')" }
+          Write-Host 'OK: binary staged, .env correct, task registered via hidden wscript shim'
+
+      # Re-run in -Configure mode against the now-existing install. This exercises the
+      # branch where an already-registered task is re-created so it adopts the wscript
+      # launcher — the upgrade path for installs created before the console-window fix.
+      # The 5 staged answers cover the config prompts (vault, port, key, embeddings); the
+      # service prompt is skipped in this branch, so the trailing answer is harmlessly unused.
+      - name: Run install.ps1 -Configure (re-register existing task)
+        shell: cmd
+        run: type ci-answers.txt | pwsh -NoProfile -ExecutionPolicy Bypass -File install.ps1 -Configure
+
+      - name: Assert -Configure result
+        shell: pwsh
+        run: |
+          schtasks /Query /TN vault-mcp 2>&1 | Out-Null
+          if ($LASTEXITCODE -ne 0) { throw 'FAIL: scheduled task missing after -Configure' }
+          $action = (Get-ScheduledTask -TaskName vault-mcp).Actions[0]
+          if ($action.Execute -notmatch 'wscript\.exe') { throw "FAIL: -Configure left the task launching '$($action.Execute)', not the wscript launcher" }
+          Write-Host 'OK: -Configure re-registered task with hidden launcher'
 
       - name: Clean up scheduled task
         if: always()

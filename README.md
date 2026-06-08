@@ -118,6 +118,8 @@ Add to `claude_desktop_config.json`:
 
 Replace `/path/to/vault-mcp` with the actual binary path — typically `~/.local/bin/vault-mcp` after a quick install or `/usr/local/bin/vault-mcp` after a manual install. The `vault-mcp` server must be running (the background service installed by the setup script handles this automatically).
 
+The `claude_desktop_config.json` location varies by platform and build — see [docs/clients.md](docs/clients.md#claude-desktop). Windows users on the Microsoft Store build of Claude Desktop have it under `%LOCALAPPDATA%\Packages\Claude_pzs8sxrjxfjjc\...`, not `%APPDATA%\Claude`; `install.ps1` detects and prints the right path.
+
 ### Verify
 
 ```bash
