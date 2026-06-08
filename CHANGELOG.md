@@ -4,16 +4,21 @@ All notable changes to this project will be documented in this file.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.2.3] - 2026-06-08
 
 ### Fixed
 - The Windows background service no longer flashes a console window on every login/restart. The Task Scheduler task ran `vault-mcp.exe` directly, and because the binary is a console app, Windows allocated a visible console window each time it started (the task's `Hidden` flag does not suppress console windows). `install.ps1` now stages a `launch-hidden.vbs` shim next to the binary and points the task at `wscript.exe "...\launch-hidden.vbs"`, which starts the server with a hidden window. A `-Configure` run on an existing install re-creates the task so it adopts the shim.
 - The Windows installer now prints the correct `claude_desktop_config.json` path for the Microsoft Store (AppX) build of Claude Desktop, which stores its config under `%LOCALAPPDATA%\Packages\Claude_pzs8sxrjxfjjc\LocalCache\Roaming\Claude\` instead of `%APPDATA%\Claude\`. The installer probes both locations and shows whichever exists (or both, with guidance, if neither is found yet).
+- The Windows installer escapes XML-special characters in the scheduled-task paths. A profile path may legitimately contain `&` (Windows allows it in account and folder names, e.g. `C:\Users\John & Jane\…`); interpolated raw into the Task Scheduler XML it produced malformed XML and a cryptic `schtasks /Create` parse failure. `$VBS_PATH` and `$CFG_DIR` now pass through `[System.Security.SecurityElement]::Escape()`.
+- The `launch-hidden.vbs` shim is now written as UTF-16 LE (with BOM) rather than `-Encoding Default`. Under PowerShell Core, `Default` is BOM-less UTF-8, which Windows Script Host misreads as ANSI and mangles — corrupting exactly the non-ASCII profile paths (e.g. `C:\Users\René`) the encoding was meant to preserve. UTF-16 is supported by `wscript.exe` and behaves identically on Windows PowerShell 5.1 and PowerShell Core.
 
 ### Changed
 - The Windows installer's "Connect Claude Desktop" output now explains the architecture: the background service runs the HTTP server (`vault-mcp.exe`, no args), while Claude Desktop spawns `vault-mcp.exe bridge` on demand as a stdio↔HTTP proxy to that server — not a second server. Documented the same in `docs/installation.md` and `docs/clients.md`.
 
-[Unreleased]: https://github.com/videnovnebojsa/vault-mcp/compare/v0.2.2...HEAD
+### Security
+- Overrode the transitive `hono` dependency (pulled in via `@modelcontextprotocol/sdk › @hono/node-server`) to `^4.12.21` to clear four moderate advisories — IPv6 deny-rule bypass, Set-Cookie injection, JWT scheme acceptance, and mount-prefix routing. Resolves to `4.12.24`; compatible with `@hono/node-server`'s `^4` peer range.
+
+[0.2.3]: https://github.com/videnovnebojsa/vault-mcp/compare/v0.2.2...v0.2.3
 
 ## [0.2.2] - 2026-06-03
 
