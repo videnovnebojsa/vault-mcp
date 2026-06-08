@@ -208,7 +208,11 @@ Logs: `journalctl --user -u vault-mcp -f`
 
 ### Windows — Task Scheduler
 
-The setup script registers the task via `schtasks /Create /XML`. To manage manually:
+The setup script registers the task via `schtasks /Create /XML`. The task runs the
+**HTTP server** (`vault-mcp.exe`, no args). It launches through a `launch-hidden.vbs`
+shim (`wscript.exe "...\launch-hidden.vbs"`) rather than the exe directly — `vault-mcp.exe`
+is a console app, so running it from the task would pop a black console window on every
+login. The shim starts it with a hidden window. To manage manually:
 
 ```powershell
 # Start
@@ -218,6 +222,9 @@ schtasks /End /TN vault-mcp; schtasks /Run /TN vault-mcp
 ```
 
 Logs: Task Scheduler → vault-mcp → History
+
+> Claude Desktop does **not** use this task. It spawns `vault-mcp.exe bridge` on demand —
+> a stdio↔HTTP proxy to the running server, not a second server.
 
 ---
 

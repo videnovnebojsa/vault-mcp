@@ -78,7 +78,12 @@ With an API key:
 
 `claude_desktop_config.json` locations:
 - **macOS**: `~/Library/Application Support/Claude/claude_desktop_config.json`
-- **Windows**: `%APPDATA%\Claude\claude_desktop_config.json`
+- **Windows (classic build)**: `%APPDATA%\Claude\claude_desktop_config.json`
+- **Windows (Microsoft Store build)**: `%LOCALAPPDATA%\Packages\Claude_pzs8sxrjxfjjc\LocalCache\Roaming\Claude\claude_desktop_config.json`
+
+The Microsoft Store (AppX) build of Claude Desktop redirects its config into the package
+container, so the classic `%APPDATA%\Claude` path will not exist. `install.ps1` detects
+which build you have and prints the correct path.
 
 ---
 

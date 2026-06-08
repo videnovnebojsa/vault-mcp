@@ -4,6 +4,17 @@ All notable changes to this project will be documented in this file.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+- The Windows background service no longer flashes a console window on every login/restart. The Task Scheduler task ran `vault-mcp.exe` directly, and because the binary is a console app, Windows allocated a visible console window each time it started (the task's `Hidden` flag does not suppress console windows). `install.ps1` now stages a `launch-hidden.vbs` shim next to the binary and points the task at `wscript.exe "...\launch-hidden.vbs"`, which starts the server with a hidden window. A `-Configure` run on an existing install re-creates the task so it adopts the shim.
+- The Windows installer now prints the correct `claude_desktop_config.json` path for the Microsoft Store (AppX) build of Claude Desktop, which stores its config under `%LOCALAPPDATA%\Packages\Claude_pzs8sxrjxfjjc\LocalCache\Roaming\Claude\` instead of `%APPDATA%\Claude\`. The installer probes both locations and shows whichever exists (or both, with guidance, if neither is found yet).
+
+### Changed
+- The Windows installer's "Connect Claude Desktop" output now explains the architecture: the background service runs the HTTP server (`vault-mcp.exe`, no args), while Claude Desktop spawns `vault-mcp.exe bridge` on demand as a stdio↔HTTP proxy to that server — not a second server. Documented the same in `docs/installation.md` and `docs/clients.md`.
+
+[Unreleased]: https://github.com/videnovnebojsa/vault-mcp/compare/v0.2.2...HEAD
+
 ## [0.2.2] - 2026-06-03
 
 ### Fixed
