@@ -25,7 +25,8 @@
     },
   },
   "overrides": {
-    "_overrides_rationale": "js-yaml pinned to ^4.1.1: transitive deps pull in 3.x which has known CVEs (arbitrary code execution via untrusted YAML). qs pinned to >=6.15.2 to avoid prototype-pollution CVE in older versions.",
+    "_overrides_rationale": "js-yaml pinned to ^4.1.1: transitive deps pull in 3.x which has known CVEs (arbitrary code execution via untrusted YAML). qs pinned to >=6.15.2 to avoid prototype-pollution CVE in older versions. hono pinned to >=4.12.21 (pulled in via @modelcontextprotocol/sdk › @hono/node-server) to clear four moderate advisories — IPv6 deny-rule bypass, Set-Cookie injection, JWT scheme acceptance, and mount-prefix routing; @hono/node-server's peer range is ^4 so the patch is compatible.",
+    "hono": ">=4.12.21",
     "js-yaml": "^4.1.1",
     "qs": ">=6.15.2",
   },
@@ -354,7 +355,7 @@
 
     "hasown": ["hasown@2.0.3", "", { "dependencies": { "function-bind": "1.1.2" } }, "sha512-ej4AhfhfL2Q2zpMmLo7U1Uv9+PyhIZpgQLGT1F9miIGmiCJIoCgSmczFdrc97mWT4kVY72KA+WnnhJ5pghSvSg=="],
 
-    "hono": ["hono@4.12.18", "", {}, "sha512-RWzP96k/yv0PQfyXnWjs6zot20TqfpfsNXhOnev8d1InAxubW93L11/oNUc3tQqn2G0bSdAOBpX+2uDFHV7kdQ=="],
+    "hono": ["hono@4.12.24", "", {}, "sha512-I36D1s+HgQc55KbhEr4iybfxv/9o1zdpw+XEM6dJa91LqQD0HCoSGdxpRJCZE+aavs87j4V3Ls2OJzq8C/U4iw=="],
 
     "http-errors": ["http-errors@2.0.1", "", { "dependencies": { "depd": "2.0.0", "inherits": "2.0.4", "setprototypeof": "1.2.0", "statuses": "2.0.2", "toidentifier": "1.0.1" } }, "sha512-4FbRdAX+bSdmo4AUFuS0WNiPz8NgFt+r8ThgNWmlrjQjt1Q7ZR9+zTlce2859x4KSXrwIsaeTqDoKQmtP8pLmQ=="],
 
