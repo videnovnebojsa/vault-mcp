@@ -111,6 +111,11 @@ function Get-ClaudeDesktopConfigPaths {
 # that point straight at the exe adopt the hidden wscript launcher. /F overwrites in place.
 function Install-VaultTask {
     $xmlPath = Join-Path $env:TEMP "vault-mcp-task.xml"
+    # XML-escape the interpolated paths: a profile path may legitimately contain '&'
+    # (Windows allows it in account/folder names), which would otherwise produce malformed
+    # XML and a cryptic schtasks /Create parse failure.
+    $vbsPathXml = [System.Security.SecurityElement]::Escape($VBS_PATH)
+    $cfgDirXml  = [System.Security.SecurityElement]::Escape($CFG_DIR)
     $xml = @"
 <?xml version="1.0" encoding="UTF-16"?>
 <Task version="1.2" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
@@ -141,8 +146,8 @@ function Install-VaultTask {
   <Actions Context="Author">
     <Exec>
       <Command>wscript.exe</Command>
-      <Arguments>"$VBS_PATH"</Arguments>
-      <WorkingDirectory>$CFG_DIR</WorkingDirectory>
+      <Arguments>"$vbsPathXml"</Arguments>
+      <WorkingDirectory>$cfgDirXml</WorkingDirectory>
     </Exec>
   </Actions>
 </Task>
