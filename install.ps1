@@ -89,9 +89,11 @@ function Write-VbsLauncher {
 Set WshShell = CreateObject("WScript.Shell")
 WshShell.Run """$escaped""", 0, False
 "@
-    # Default = system ANSI codepage, which wscript expects for a BOM-less .vbs; ASCII would
-    # mangle a path containing non-ASCII characters (e.g. an accented username).
-    $vbs | Set-Content -Path $VBS_PATH -Encoding Default
+    # Unicode (UTF-16 LE with BOM) is what wscript expects for a non-ANSI .vbs and behaves
+    # identically on Windows PowerShell 5.1 and PowerShell Core, preserving non-ASCII paths
+    # (e.g. C:\Users\René). -Encoding Default would write BOM-less UTF-8 under PowerShell
+    # Core, which wscript misreads as ANSI and mangles.
+    $vbs | Set-Content -Path $VBS_PATH -Encoding Unicode
 }
 
 # Claude Desktop's config lives in different places depending on the build. The classic
