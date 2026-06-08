@@ -70,7 +70,7 @@
   "overrides": {
     "qs": ">=6.15.2",
     "js-yaml": "^4.1.1",
-    "hono": ">=4.12.21",
-    "_overrides_rationale": "js-yaml pinned to ^4.1.1: transitive deps pull in 3.x which has known CVEs (arbitrary code execution via untrusted YAML). qs pinned to >=6.15.2 to avoid prototype-pollution CVE in older versions. hono pinned to >=4.12.21 (pulled in via @modelcontextprotocol/sdk › @hono/node-server) to clear four moderate advisories — IPv6 deny-rule bypass, Set-Cookie injection, JWT scheme acceptance, and mount-prefix routing; @hono/node-server's peer range is ^4 so the patch is compatible."
+    "hono": "^4.12.21",
+    "_overrides_rationale": "js-yaml pinned to ^4.1.1: transitive deps pull in 3.x which has known CVEs (arbitrary code execution via untrusted YAML). qs pinned to >=6.15.2 to avoid prototype-pollution CVE in older versions. hono pinned to ^4.12.21 (pulled in via @modelcontextprotocol/sdk › @hono/node-server) to clear four moderate advisories — IPv6 deny-rule bypass, Set-Cookie injection, JWT scheme acceptance, and mount-prefix routing; caret-bounded to stay within @hono/node-server's ^4 peer range and avoid a future major (5.x)."
   }
 }
