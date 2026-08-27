@@ -54,28 +54,55 @@ schtasks /End /TN vault-mcp; schtasks /Run /TN vault-mcp
 
 ### 3. Verify the server is ready
 
+`3782` is only the default. If you chose a different port at install time, use the `MCP_PORT`
+value from your `.env`:
+
 ```bash
-curl http://localhost:3782/ready
-# {"ready":true,"vaultCount":1,"unreadyCount":0}
+PORT=$(grep '^MCP_PORT=' ~/.config/vault-mcp/.env | cut -d= -f2)
+curl "http://localhost:${PORT:-3782}/ready"
+# {"ready":true,"vaultCount":1}
+# 503 while still indexing: {"ready":false,"vaultCount":1,"unreadyCount":1}
 ```
 
 `/ready` returns 503 until the vault index finishes loading. Wait for `"ready":true` before proceeding.
 
+> **If you query the wrong port you may get an answer anyway.** Another local service
+> listening there will reply with its own error, not a connection refusal. `Cannot GET /ready`,
+> an HTML error page, or any response that is not the JSON above means you are talking to
+> something that is not vault-mcp. Confirm what holds the port with
+> `lsof -nP -iTCP:<port> -sTCP:LISTEN` (macOS/Linux) or `netstat -ano | findstr :<port>` (Windows).
+
 ### 4. Run the embedding backfill
 
 ```json
-{ "tool": "vault_embed_backlog", "max_notes": 500 }
+{ "tool": "vault_embed_backlog", "max_notes": 250 }
 ```
 
 Call this repeatedly until `remaining` reaches zero:
 
 ```
-{ "max_notes": 500 }  →  { "remaining": 1847, "message": "Embedded 500 notes, 0 errors…" }
-{ "max_notes": 500 }  →  { "remaining": 1347, "message": "Embedded 500 notes, 0 errors…" }
-{ "max_notes": 500 }  →  { "remaining": 847,  "message": "Embedded 500 notes, 0 errors…" }
-{ "max_notes": 500 }  →  { "remaining": 347,  "message": "Embedded 500 notes, 0 errors…" }
-{ "max_notes": 500 }  →  { "remaining": 0,    "message": "Embedded 347 notes, 0 errors…" }
+{ "max_notes": 250 }  →  { "remaining": 1074, "message": "Embedded 250 notes, 0 errors…" }
+{ "max_notes": 250 }  →  { "remaining": 765,  "message": "Embedded 250 notes, 0 errors…" }
+{ "max_notes": 250 }  →  { "remaining": 515,  "message": "Embedded 250 notes, 0 errors…" }
+{ "max_notes": 250 }  →  { "remaining": 266,  "message": "Embedded 250 notes, 0 errors…" }
+{ "max_notes": 250 }  →  { "remaining": 0,    "message": "Embedded 266 notes, 0 errors…" }
 ```
+
+**Keep `max_notes` small enough to finish inside `TOOL_TIMEOUT_MS` (default 30000).** Embedding
+runs at roughly 10 to 15 notes per second against OpenAI, so 250 lands around 17 to 24 seconds
+and 500 overruns the limit and comes back as:
+
+```json
+{ "ok": false, "error": { "code": "TIMEOUT", "message": "Operation timed out after 30000ms" } }
+```
+
+That error is misleading. The server keeps embedding in the background, so the batch is not lost
+and `remaining` still drops. You just lose the report. Either stay at 250, or raise
+[`TOOL_TIMEOUT_MS`](configuration.md) and use bigger batches.
+
+> Notes with no body are skipped and listed under `Failed:` with
+> `skipped (empty content, consider deleting)`. They still count as embedded for progress
+> purposes, but they reappear in the `Failed:` list on every future run until you delete them.
 
 ### 5. Verify hybrid search works
 
@@ -165,8 +192,10 @@ Under the hood: `score = alpha × BM25_normalized + (1 − alpha) × cosine_simi
 | Results look keyword-only after enabling | Server not restarted after config change | Restart the service; confirm both `ENABLE_EMBEDDINGS=true` and `EMBEDDING_API_KEY` are set |
 | `vault_embed_backlog` returns `NOT_ENABLED` | Missing env var | Verify both `ENABLE_EMBEDDINGS` and `EMBEDDING_API_KEY` are present in `.env` |
 | `remaining` is not decreasing | Wrong API key, quota exceeded, or network error | Check server logs for `embed-provider` errors (see below) |
+| `vault_embed_backlog` returns `TIMEOUT` | `max_notes` too large to finish inside `TOOL_TIMEOUT_MS` | Lower `max_notes` to ~250, or raise `TOOL_TIMEOUT_MS`. Work continues server-side, so re-check `remaining` before retrying |
 | Results feel stale after adding notes | File watcher doesn't auto-embed | Run `vault_embed_backlog` again |
-| `MODE_UNAVAILABLE` error on `vault_search` | Embeddings not enabled | Complete the Quick Start steps above |
+| `MODE_UNAVAILABLE` error on `vault_search` | Embeddings not enabled | Complete the Quick Start steps above. Check `ENABLE_EMBEDDINGS` and `EMBEDDING_API_KEY` in `.env`, then restart |
+| `/ready` returns HTML, `Cannot GET /ready`, or an unexpected shape | You are querying a port another service holds | Read `MCP_PORT` from `.env` and retry against that port |
 | All embeddings suddenly stale | `EMBEDDING_MODEL` was changed | Run a full backfill — old vectors are incompatible with the new model |
 
 **Viewing server logs:**

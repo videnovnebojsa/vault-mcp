@@ -100,7 +100,7 @@ bun run build
 OBSIDIAN_VAULT_PATH=~/Documents/obsidian bun run start
 ```
 
-The server starts on `http://127.0.0.1:3782` by default.
+The server starts on `http://127.0.0.1:3782` by default. Set `MCP_PORT` to change it.
 
 To run as a background service, create the service definition manually (see [Running as a background service](#running-as-a-background-service) below) and point it to `bun run start` in the vault-mcp directory.
 
@@ -230,12 +230,24 @@ Logs: Task Scheduler → vault-mcp → History
 
 ## Verifying the installation
 
+These examples use the default port. If you picked a different one during setup, substitute the
+`MCP_PORT` value from your config file:
+
 ```bash
-curl http://localhost:3782/health
+PORT=$(grep '^MCP_PORT=' ~/.config/vault-mcp/.env | cut -d= -f2)
+
+curl "http://localhost:${PORT:-3782}/health"
 # {"status":"ok","uptimeSeconds":12,...}
 
-curl http://localhost:3782/ready
-# {"ready":true,"vaultCount":1,"unreadyCount":0}
+curl "http://localhost:${PORT:-3782}/ready"
+# {"ready":true,"vaultCount":1}
+# 503 while still indexing: {"ready":false,"vaultCount":1,"unreadyCount":1}
 ```
 
 `/ready` returns HTTP 503 until the vault index finishes its initial sync. `/health` always returns 200.
+
+> **A reply is not proof you reached vault-mcp.** If another service holds the port you queried,
+> it answers with its own error rather than refusing the connection, so a stray `Cannot GET /ready`
+> or an HTML page reads like a broken install when the real server is healthy elsewhere. Check
+> which process owns a port with `lsof -nP -iTCP:<port> -sTCP:LISTEN` (macOS/Linux) or
+> `netstat -ano | findstr :<port>` (Windows).

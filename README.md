@@ -129,6 +129,11 @@ curl http://localhost:3782/health
 
 `/health` always returns 200; `/ready` returns 503 until the vault index finishes its initial sync.
 
+`3782` is the default port. If you changed it at install time, use your `MCP_PORT` value here and
+in the client config above. A response that is not the JSON shown means another service holds that
+port, since it answers instead of refusing the connection. See
+[docs/installation.md](docs/installation.md#verifying-the-installation).
+
 ## Common workflows
 
 Once connected, just talk to your agent in plain language. Try:

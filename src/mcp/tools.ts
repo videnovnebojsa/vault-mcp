@@ -411,7 +411,11 @@ export function registerTools(opts: RegisterToolsOptions): void {
         .min(1)
         .max(10_000)
         .default(500)
-        .describe("Max notes to embed in this call (default 500). Call repeatedly until result.remaining === 0."),
+        .describe(
+          "Max notes to embed in this call (default 500). Call repeatedly until result.remaining === 0. " +
+            "Large batches can exceed TOOL_TIMEOUT_MS (default 30s) and return a TIMEOUT error even though " +
+            "the server keeps embedding in the background; ~250 is a safe batch size at typical API speeds.",
+        ),
       vault: VAULT_PARAM,
     },
     wrapHandler("vault_embed_backlog", async (args) => {
