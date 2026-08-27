@@ -138,6 +138,7 @@ ${envLine(values, "VAULT_FOLDER_ARCHIVE", "99_Archive", "excluded from connectio
 
 # ── Advanced ──────────────────────────────────────────────────────────────────
 ${envLine(values, "TOOL_TIMEOUT_MS", "30000", "0 = disabled")}
+${envLine(values, "SQLITE_BUSY_TIMEOUT_MS", "5000", "wait for a competing writer; 0 = fail immediately")}
 `;
 }
 

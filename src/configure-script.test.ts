@@ -93,6 +93,7 @@ describe("renderEnvTemplate", () => {
     expect(output).toContain("# MCP_PORT=");
     expect(output).toContain("# ENABLE_EMBEDDINGS=");
     expect(output).toContain("# TOOL_TIMEOUT_MS=");
+    expect(output).toContain("# SQLITE_BUSY_TIMEOUT_MS=");
   });
 
   it("round-trips: parse(render(map)) recovers the original values [CFG-12]", () => {
@@ -234,6 +235,17 @@ describe("validateSetting", () => {
     } finally {
       held.stop(true);
     }
+  });
+
+  it("exposes SQLITE_BUSY_TIMEOUT_MS with its documented range [DB-01]", async () => {
+    const s = findSetting("SQLITE_BUSY_TIMEOUT_MS");
+    expect(s.default).toBe("5000");
+    expect(await validateSetting(s, "5000")).toBeNull();
+    expect(await validateSetting(s, "0")).toBeNull();
+    expect(await validateSetting(s, "300000")).toBeNull();
+    expect(await validateSetting(s, "300001")).not.toBeNull();
+    expect(await validateSetting(s, "-1")).not.toBeNull();
+    expect(await validateSetting(s, "abc")).not.toBeNull();
   });
 
   it("rejects port out of range [CFG-23]", async () => {
