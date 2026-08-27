@@ -6,6 +6,7 @@ import os from "node:os";
 import path from "node:path";
 import { logger } from "../utils/logger.js";
 import { EmbeddingStore } from "./embeddings.js";
+import { pragmaSql } from "./sqlite-shim-sql.js";
 import { sanitizeFTS5Query, VaultSearchStore } from "./store.js";
 
 describe("VaultSearchStore", () => {
@@ -21,6 +22,112 @@ describe("VaultSearchStore", () => {
 
   it("creates schema without error", () => {
     expect(store.count()).toBe(0);
+  });
+
+  it("sets a non-zero busy_timeout on file-backed databases [DB-01]", () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "vault-busy-timeout-"));
+    const dbPath = path.join(dir, "index.db");
+    const fileStore = new VaultSearchStore(dbPath);
+    try {
+      const probe = new Database(dbPath);
+      try {
+        const row = probe.prepare("PRAGMA busy_timeout").get() as { timeout?: number };
+        // A fresh connection defaults to 0. Ours must have been raised, otherwise a second
+        // writer fails instantly with SQLITE_BUSY instead of waiting for the lock.
+        const own = fileStore.getBusyTimeoutMs();
+        expect(own).toBe(5_000);
+        expect(row.timeout).toBe(0);
+      } finally {
+        probe.close();
+      }
+    } finally {
+      fileStore.close();
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("honours an explicit busyTimeoutMs override [DB-01]", () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "vault-busy-timeout-opt-"));
+    const dbPath = path.join(dir, "index.db");
+    const fileStore = new VaultSearchStore(dbPath, { busyTimeoutMs: 250 });
+    try {
+      expect(fileStore.getBusyTimeoutMs()).toBe(250);
+    } finally {
+      fileStore.close();
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("lets two stores share one database file [DB-01]", () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "vault-busy-timeout-share-"));
+    const dbPath = path.join(dir, "index.db");
+    const a = new VaultSearchStore(dbPath);
+    const b = new VaultSearchStore(dbPath);
+    try {
+      // Sequential, so this asserts shared-file visibility, NOT lock contention.
+      // The two tests below cover contention.
+      a.upsert("a.md", "from a", "hash-a", "a.md", {});
+      b.upsert("b.md", "from b", "hash-b", "b.md", {});
+      expect(a.count()).toBe(2);
+      expect(b.count()).toBe(2);
+      expect(b.getBusyTimeoutMs()).toBe(5_000);
+    } finally {
+      a.close();
+      b.close();
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  /**
+   * Hold the write lock on a separate connection with BEGIN IMMEDIATE, then time how long
+   * a competing write takes to give up. That elapsed time is the only direct evidence that
+   * busy_timeout is in effect: without it SQLite returns SQLITE_BUSY on the first attempt.
+   */
+  const withHeldWriteLock = (dbPath: string, fn: () => void): void => {
+    const holder = new Database(dbPath);
+    try {
+      holder.exec(pragmaSql("journal_mode = WAL"));
+      holder.exec("BEGIN IMMEDIATE");
+      fn();
+      holder.exec("ROLLBACK");
+    } finally {
+      holder.close();
+    }
+  };
+
+  it("gives up immediately against a held write lock when busy_timeout is 0 [DB-01]", () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "vault-busy-contend-zero-"));
+    const dbPath = path.join(dir, "index.db");
+    new VaultSearchStore(dbPath).close(); // create schema before the lock is taken
+    const store = new VaultSearchStore(dbPath, { busyTimeoutMs: 0 });
+    try {
+      withHeldWriteLock(dbPath, () => {
+        const started = performance.now();
+        expect(() => store.upsert("x.md", "c", "h", "x.md", {})).toThrow();
+        expect(performance.now() - started).toBeLessThan(150);
+      });
+    } finally {
+      store.close();
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("waits for the configured busy_timeout before giving up [DB-01]", () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "vault-busy-contend-wait-"));
+    const dbPath = path.join(dir, "index.db");
+    new VaultSearchStore(dbPath).close();
+    const store = new VaultSearchStore(dbPath, { busyTimeoutMs: 400 });
+    try {
+      withHeldWriteLock(dbPath, () => {
+        const started = performance.now();
+        expect(() => store.upsert("x.md", "c", "h", "x.md", {})).toThrow();
+        // Generous lower bound: the point is that it waited, not that it waited exactly 400ms.
+        expect(performance.now() - started).toBeGreaterThan(250);
+      });
+    } finally {
+      store.close();
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   it("warns when SQLite rejects WAL journal mode for a non-memory path [PERF-02]", () => {

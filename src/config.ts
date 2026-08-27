@@ -41,6 +41,7 @@ export type ClassifyRules = Record<string, ClassifyRuleEntry>;
 export interface VaultConfig {
   vaultPath: string;
   memoryDbPath: string;
+  sqliteBusyTimeoutMs: number;
   namedVaults: Record<string, string>;
   periodicNotesRoot: string;
   embedding: EmbeddingConfig;
@@ -129,6 +130,8 @@ export function loadConfig(): VaultConfig {
     ? path.resolve(expandHome(memoryDbPathRaw))
     : path.join(vaultPath, ".vault-search.db");
 
+  const sqliteBusyTimeoutMs = Math.max(0, Math.min(300_000, safeInt(process.env["SQLITE_BUSY_TIMEOUT_MS"], 5_000)));
+
   const hybridAlphaRaw = parseFloat(process.env["HYBRID_ALPHA"] ?? "");
   const hybridAlpha = Number.isFinite(hybridAlphaRaw) ? Math.max(0, Math.min(1, hybridAlphaRaw)) : 0.5;
 
@@ -153,6 +156,7 @@ export function loadConfig(): VaultConfig {
   return {
     vaultPath,
     memoryDbPath,
+    sqliteBusyTimeoutMs,
     namedVaults,
     periodicNotesRoot: process.env["PERIODIC_NOTES_ROOT"] ?? "Journal",
     backup: {

@@ -8,6 +8,15 @@ import type { SearchResult, VaultEntry } from "./types.js";
 
 const STMT_CACHE_MAX = 256;
 const MEMORY_DB_PATH = ":memory:";
+/**
+ * How long a write waits for a competing writer before failing with SQLITE_BUSY.
+ *
+ * WAL allows one writer plus concurrent readers, but with no busy_timeout SQLite gives up
+ * immediately instead of waiting, so any second process writing the same file (a sibling
+ * service embedding this library, a second client, a backup) loses writes rather than
+ * queueing behind them.
+ */
+const DEFAULT_BUSY_TIMEOUT_MS = 5_000;
 
 type BackupWorkerResponse =
   | { ok: true }
@@ -122,9 +131,10 @@ export class VaultSearchStore implements ISearchStore {
   private readonly stmtCache = new Map<string, Statement>();
   private pathIndexCache: Map<string, string> | undefined;
 
-  constructor(dbPath: string = MEMORY_DB_PATH) {
+  constructor(dbPath: string = MEMORY_DB_PATH, opts?: { busyTimeoutMs?: number | undefined }) {
     this.dbPath = dbPath;
     this.db = new Database(dbPath);
+    this.applyBusyTimeout(opts?.busyTimeoutMs ?? DEFAULT_BUSY_TIMEOUT_MS);
     this.enableWalMode();
     runMigrations(this.db, VAULT_ENTRIES_MIGRATIONS, "schema_version");
 
@@ -186,6 +196,25 @@ export class VaultSearchStore implements ISearchStore {
 
   getStatementCacheSize(): number {
     return this.stmtCache.size;
+  }
+
+  /** Effective busy_timeout for this connection, in ms. 0 means a competing writer fails instantly. */
+  getBusyTimeoutMs(): number {
+    const row = this.db.prepare(pragmaSql("busy_timeout")).get() as { timeout?: number } | undefined;
+    return row?.timeout ?? 0;
+  }
+
+  private applyBusyTimeout(timeoutMs: number): void {
+    if (this.dbPath === MEMORY_DB_PATH) return;
+    try {
+      this.db.exec(pragmaSql(`busy_timeout = ${timeoutMs}`));
+    } catch (err) {
+      logger.warn("sqlite-shim", "busy_timeout pragma failed", {
+        dbPath: this.dbPath,
+        timeoutMs,
+        err: err instanceof Error ? err.message : String(err),
+      });
+    }
   }
 
   private enableWalMode(): void {

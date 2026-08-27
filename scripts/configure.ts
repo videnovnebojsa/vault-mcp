@@ -452,6 +452,15 @@ export const SECTIONS: Section[] = [
         intRange: [0, 600000],
       },
       {
+        key: "SQLITE_BUSY_TIMEOUT_MS",
+        label: "SQLite busy timeout (ms)",
+        type: "integer",
+        default: "5000",
+        description: "How long a write waits for a competing writer before failing. 0 = fail immediately.",
+        optional: true,
+        intRange: [0, 300000],
+      },
+      {
         key: "PERIODIC_NOTES_ROOT",
         label: "Periodic notes root folder",
         type: "string",

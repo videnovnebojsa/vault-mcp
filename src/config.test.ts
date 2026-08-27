@@ -122,6 +122,24 @@ describe("integer env var parsing (safeInt)", () => {
     const { toolTimeoutMs } = loadConfig();
     expect(toolTimeoutMs).toBe(30_000);
   });
+
+  it("parses SQLITE_BUSY_TIMEOUT_MS [DB-01]", () => {
+    process.env["SQLITE_BUSY_TIMEOUT_MS"] = "1000";
+    expect(loadConfig().sqliteBusyTimeoutMs).toBe(1000);
+  });
+
+  it("uses default 5000 for SQLITE_BUSY_TIMEOUT_MS when absent [DB-01]", () => {
+    delete process.env["SQLITE_BUSY_TIMEOUT_MS"];
+    expect(loadConfig().sqliteBusyTimeoutMs).toBe(5_000);
+  });
+
+  it("clamps SQLITE_BUSY_TIMEOUT_MS to the documented range [DB-01]", () => {
+    process.env["SQLITE_BUSY_TIMEOUT_MS"] = "-1";
+    expect(loadConfig().sqliteBusyTimeoutMs).toBe(0);
+    process.env["SQLITE_BUSY_TIMEOUT_MS"] = "999999";
+    expect(loadConfig().sqliteBusyTimeoutMs).toBe(300_000);
+    delete process.env["SQLITE_BUSY_TIMEOUT_MS"];
+  });
 });
 
 // ── parsePathList / ACL ───────────────────────────────────────────────────────
