@@ -23,6 +23,58 @@ describe("VaultSearchStore", () => {
     expect(store.count()).toBe(0);
   });
 
+  it("sets a non-zero busy_timeout on file-backed databases [DB-01]", () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "vault-busy-timeout-"));
+    const dbPath = path.join(dir, "index.db");
+    const fileStore = new VaultSearchStore(dbPath);
+    try {
+      const probe = new Database(dbPath);
+      try {
+        const row = probe.prepare("PRAGMA busy_timeout").get() as { timeout?: number };
+        // A fresh connection defaults to 0. Ours must have been raised, otherwise a second
+        // writer fails instantly with SQLITE_BUSY instead of waiting for the lock.
+        const own = fileStore.getBusyTimeoutMs();
+        expect(own).toBe(5_000);
+        expect(row.timeout).toBe(0);
+      } finally {
+        probe.close();
+      }
+    } finally {
+      fileStore.close();
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("honours an explicit busyTimeoutMs override [DB-01]", () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "vault-busy-timeout-opt-"));
+    const dbPath = path.join(dir, "index.db");
+    const fileStore = new VaultSearchStore(dbPath, { busyTimeoutMs: 250 });
+    try {
+      expect(fileStore.getBusyTimeoutMs()).toBe(250);
+    } finally {
+      fileStore.close();
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("lets a second connection write while the first holds the file [DB-01]", () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "vault-busy-timeout-share-"));
+    const dbPath = path.join(dir, "index.db");
+    const a = new VaultSearchStore(dbPath);
+    const b = new VaultSearchStore(dbPath);
+    try {
+      a.upsert("a.md", "from a", "hash-a", "a.md", {});
+      b.upsert("b.md", "from b", "hash-b", "b.md", {});
+      expect(a.count()).toBe(2);
+      expect(b.count()).toBe(2);
+      expect(b.getBusyTimeoutMs()).toBe(5_000);
+    } finally {
+      a.close();
+      b.close();
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it("warns when SQLite rejects WAL journal mode for a non-memory path [PERF-02]", () => {
     const warnSpy = spyOn(logger, "warn").mockImplementation(() => {});
     // Force the WAL pragma to report "memory" regardless of SQLite version —

@@ -114,3 +114,4 @@ Run `bun run configure -- --section vault-folders` to configure these interactiv
 | Variable | Default | Description |
 |---|---|---|
 | `TOOL_TIMEOUT_MS` | `30000` | Max milliseconds a tool call may run before being aborted (0 = disabled) |
+| `SQLITE_BUSY_TIMEOUT_MS` | `5000` | How long a write waits for a competing writer before failing with `SQLITE_BUSY`. Raise it if another process shares the same index file; `0` restores the fail-immediately behaviour (max 300000) |

@@ -139,7 +139,7 @@ export class VaultManager implements SyncTracker {
 
     const vault = new VaultRepository({ vaultPath, acl: aclConfig });
     const dbPath = this.dbPathForVault(name);
-    const searchStore = new VaultSearchStore(dbPath);
+    const searchStore = new VaultSearchStore(dbPath, { busyTimeoutMs: this.baseConfig.sqliteBusyTimeoutMs });
     const vaultSync = new VaultSync({ vaultPath, store: searchStore });
 
     let embeddingStore: EmbeddingStore | undefined;
