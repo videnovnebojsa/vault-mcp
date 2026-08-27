@@ -213,8 +213,27 @@ describe("validateSetting", () => {
 
   it("accepts port in valid range [CFG-22]", async () => {
     const s = findSetting("MCP_PORT");
-    expect(await validateSetting(s, "3782", "3782")).toBeNull(); // unchanged — skip in-use check
-    expect(await validateSetting(s, "8080", "3782")).toBeNull(); // different port, not in use
+    // Unchanged port skips the in-use check entirely, so no binding is involved.
+    expect(await validateSetting(s, "3782", "3782")).toBeNull();
+
+    // For the changed-port path, discover a port the OS says is free rather than
+    // assuming one. Hardcoding (this used to use 8080) fails on any machine that
+    // happens to run something there.
+    const probe = Bun.serve({ port: 0, hostname: "127.0.0.1", fetch: () => new Response() });
+    const freePort = probe.port;
+    probe.stop(true);
+    expect(await validateSetting(s, String(freePort), "3782")).toBeNull();
+  });
+
+  it("rejects a port that is actually in use [CFG-22b]", async () => {
+    const s = findSetting("MCP_PORT");
+    const held = Bun.serve({ port: 0, hostname: "127.0.0.1", fetch: () => new Response() });
+    try {
+      const result = await validateSetting(s, String(held.port), "3782");
+      expect(result).toContain("already in use");
+    } finally {
+      held.stop(true);
+    }
   });
 
   it("rejects port out of range [CFG-23]", async () => {
