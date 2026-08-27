@@ -54,12 +54,23 @@ schtasks /End /TN vault-mcp; schtasks /Run /TN vault-mcp
 
 ### 3. Verify the server is ready
 
+`3782` is only the default. If you chose a different port at install time, use the `MCP_PORT`
+value from your `.env`:
+
 ```bash
-curl http://localhost:3782/ready
-# {"ready":true,"vaultCount":1,"unreadyCount":0}
+PORT=$(grep '^MCP_PORT=' ~/.config/vault-mcp/.env | cut -d= -f2)
+curl "http://localhost:${PORT:-3782}/ready"
+# {"ready":true,"vaultCount":1}
+# 503 while still indexing: {"ready":false,"vaultCount":1,"unreadyCount":1}
 ```
 
 `/ready` returns 503 until the vault index finishes loading. Wait for `"ready":true` before proceeding.
+
+> **If you query the wrong port you may get an answer anyway.** Another local service
+> listening there will reply with its own error, not a connection refusal. `Cannot GET /ready`,
+> an HTML error page, or any response that is not the JSON above means you are talking to
+> something that is not vault-mcp. Confirm what holds the port with
+> `lsof -nP -iTCP:<port> -sTCP:LISTEN` (macOS/Linux) or `netstat -ano | findstr :<port>` (Windows).
 
 ### 4. Run the embedding backfill
 
@@ -166,7 +177,8 @@ Under the hood: `score = alpha × BM25_normalized + (1 − alpha) × cosine_simi
 | `vault_embed_backlog` returns `NOT_ENABLED` | Missing env var | Verify both `ENABLE_EMBEDDINGS` and `EMBEDDING_API_KEY` are present in `.env` |
 | `remaining` is not decreasing | Wrong API key, quota exceeded, or network error | Check server logs for `embed-provider` errors (see below) |
 | Results feel stale after adding notes | File watcher doesn't auto-embed | Run `vault_embed_backlog` again |
-| `MODE_UNAVAILABLE` error on `vault_search` | Embeddings not enabled | Complete the Quick Start steps above |
+| `MODE_UNAVAILABLE` error on `vault_search` | Embeddings not enabled | Complete the Quick Start steps above. Check `ENABLE_EMBEDDINGS` and `EMBEDDING_API_KEY` in `.env`, then restart |
+| `/ready` returns HTML, `Cannot GET /ready`, or an unexpected shape | You are querying a port another service holds | Read `MCP_PORT` from `.env` and retry against that port |
 | All embeddings suddenly stale | `EMBEDDING_MODEL` was changed | Run a full backfill — old vectors are incompatible with the new model |
 
 **Viewing server logs:**
