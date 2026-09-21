@@ -255,6 +255,15 @@ describe("validateSetting", () => {
     expect(await validateSetting(s, "abc")).not.toBeNull(); // not a number
   });
 
+  it("rejects malformed port values instead of coercing them [CFG-34]", async () => {
+    const s = findSetting("MCP_PORT");
+    expect(await validateSetting(s, "3782abc")).not.toBeNull();
+    expect(await validateSetting(s, "3782.5")).not.toBeNull();
+    expect(await validateSetting(s, " 3782")).not.toBeNull();
+    expect(await validateSetting(s, "3782 ")).not.toBeNull();
+    expect(await validateSetting(s, "+3782")).not.toBeNull();
+  });
+
   it("accepts valid http/https URLs [CFG-24]", async () => {
     const s = findSetting("EMBEDDING_ENDPOINT");
     expect(await validateSetting(s, "https://api.openai.com/v1")).toBeNull();

@@ -500,8 +500,12 @@ export async function validateSetting(setting: Setting, raw: string, currentPort
     }
 
     case "port": {
-      const p = parseInt(raw, 10);
-      if (Number.isNaN(p) || p < 1024 || p > 65535) return "Port must be a number between 1024 and 65535";
+      // Port input must be a canonical base-10 integer. parseInt() alone would
+      // silently accept values such as "3782abc" or "3782.5" as 3782.
+      if (!/^\\d+$/.test(raw)) return "Port must be a whole number between 1024 and 65535";
+      const p = Number(raw);
+      if (!Number.isSafeInteger(p) || p < 1024 || p > 65535)
+        return "Port must be a whole number between 1024 and 65535";
       // Skip in-use check if port is unchanged (the existing service holds it)
       if (raw === currentPort) return null;
       if (await isPortInUse(p)) return `Port ${p} is already in use`;
