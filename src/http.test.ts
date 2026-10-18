@@ -168,6 +168,19 @@ function httpPostJsonFull(
   });
 }
 
+function decodeChunkedBody(body: string): string {
+  let decoded = "";
+  let rest = body;
+  for (;;) {
+    const sizeLineEnd = rest.indexOf("\r\n");
+    const size = Number.parseInt(rest.slice(0, sizeLineEnd), 16);
+    if (sizeLineEnd < 0 || !size) return decoded;
+    const dataStart = sizeLineEnd + 2;
+    decoded += rest.slice(dataStart, dataStart + size);
+    rest = rest.slice(dataStart + size + 2);
+  }
+}
+
 function httpPostChunked(
   url: string,
   payload: string,
@@ -206,7 +219,9 @@ function httpPostChunked(
       const [headersPart, ...bodyParts] = response.split("\r\n\r\n");
       const statusLine = headersPart.split("\r\n")[0];
       const statusCode = Number.parseInt(statusLine.split(" ")[1] ?? "0", 10);
-      const bodyStr = bodyParts.join("\r\n\r\n").trim();
+      const rawBody = bodyParts.join("\r\n\r\n");
+      const isChunked = /^transfer-encoding:\s*chunked\s*$/im.test(headersPart);
+      const bodyStr = (isChunked ? decodeChunkedBody(rawBody) : rawBody).trim();
       try {
         resolve({ status: statusCode, body: JSON.parse(bodyStr) });
       } catch {
